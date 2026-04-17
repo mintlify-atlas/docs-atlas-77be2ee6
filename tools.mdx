@@ -1,0 +1,257 @@
+---
+title: "Passivbot tools reference"
+description: "Reference for all passivbot tool subcommands: Pareto dashboard, iterative backtester, data helpers, fill events, monitor, and exchange probes."
+---
+
+The `passivbot tool` subcommand family provides utilities for analyzing optimization results, inspecting backtests, managing OHLCV data, auditing fill events, monitoring live bots, and probing exchange state. Most tools require the full install profile.
+
+<Info>
+  Install the full profile before using most tools:
+
+  ```bash
+  pip install -e ".[full]"
+  ```
+</Info>
+
+## Pareto tools
+
+### pareto-dash
+
+Scans one or more `optimize_results/` directories and launches a Plotly Dash UI with scatter plots, histograms, suite-aware box plots, correlation heat maps, parameter-vs-metric scatter plots, a streaming history chart from `all_results.bin`, and CSV export.
+
+```bash
+passivbot tool pareto-dash --data-root optimize_results
+```
+
+Pass `--run` to load a specific run directory:
+
+```bash
+passivbot tool pareto-dash --run optimize_results/<timestamp>/
+```
+
+### pareto (pareto-explorer)
+
+Reads a Pareto directory of JSON members, optionally filters with limit expressions, and selects one candidate using a named decision method. If you omit the path, it defaults to the newest local `optimize_results/.../pareto` directory. Pointing it at an optimize run directory instead of the nested `pareto/` directory is also accepted — it resolves that automatically.
+
+```bash
+# Use the newest local pareto directory
+passivbot tool pareto
+
+# Use a specific pareto directory
+passivbot tool pareto optimize_results/.../pareto
+
+# Select closest to specified targets
+passivbot tool pareto optimize_results/.../pareto \
+  -m reference \
+  --target adg_strategy_pnl_rebased=0.001 \
+  --target drawdown_worst_hsl=0.25
+
+# Filter candidates then rank by weighted utility
+passivbot tool pareto optimize_results/... \
+  -m utility \
+  --weight adg_strategy_pnl_rebased=4 \
+  --weight drawdown_worst_hsl=2 \
+  --show-top 5
+
+# Filter with limit expressions
+passivbot tool pareto optimize_results/.../pareto \
+  -l 'drawdown_worst_hsl<=0.35' \
+  -l 'adg_strategy_pnl_rebased>0.0'
+
+# Use custom objectives outside the original scoring list
+passivbot tool pareto \
+  -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
+  -m ideal
+
+# Output JSON for scripting
+passivbot tool pareto --json
+```
+
+Available selection methods:
+
+| Method | Description |
+|--------|-------------|
+| `ideal` | Closest to the observed ideal point (default) |
+| `knee` | Approximate balanced compromise point |
+| `reference` | Closest to user-specified targets via `--target metric=value` |
+| `utility` | Highest weighted normalized utility via `--weight metric=value` |
+| `lexicographic` | Strict objective priority via `--priority metric_a,metric_b,...` |
+| `outranking` | Simplified PROMETHEE-style pairwise net-flow ranking |
+
+The `-o` / `--objectives` flag can reference stored metrics outside the original `optimize.scoring` list, as long as that metric is present in the saved Pareto JSON and Passivbot has a known optimization direction for it.
+
+`passivbot tool pareto-explorer` is a CLI alias for the same command.
+
+### pareto-transform
+
+Converts `all_results.bin` or individual Pareto JSON entries into CSV or JSON summaries for external analysis:
+
+```bash
+passivbot tool pareto-transform optimize_results/.../all_results.bin --out summary.csv
+```
+
+The legacy `src/pareto_store.py` still produces quick matplotlib scatter plots for static image output:
+
+```bash
+python3 src/pareto_store.py optimize_results/.../pareto/
+```
+
+## Backtesting utilities
+
+### iterative-backtester
+
+Replays slices of the backtester (or real fills) interactively so you can inspect order-by-order behavior. Useful when tuning configs by hand.
+
+```bash
+passivbot tool iterative-backtester --config configs/your_config.json --symbol BTC/USDT:USDT
+```
+
+### iterative-history-plot
+
+Plots the output of an iterative backtest replay or real fill history:
+
+```bash
+passivbot tool iterative-history-plot backtests/.../fills.csv
+```
+
+## Data management
+
+<AccordionGroup>
+  <Accordion title="passivbot download">
+    Pre-warms OHLCV caches using the same config, date range, and exchange selection as the backtester. Run this before long backtest or optimize sessions to avoid per-coin fetches during the run.
+
+    ```bash
+    passivbot download configs/examples/default_trailing_grid_long_npos10.json
+    passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
+    ```
+  </Accordion>
+  <Accordion title="pad-historical-daily">
+    Ensures daily OHLCV shards are present for the downloader when new coins are added to the approved list.
+
+    ```bash
+    passivbot tool pad-historical-daily
+    ```
+  </Accordion>
+  <Accordion title="verify-hlcvs-data">
+    Validates cached OHLCV data for gaps and duplicates before starting long optimizations or backtests.
+
+    ```bash
+    passivbot tool verify-hlcvs-data
+    ```
+  </Accordion>
+  <Accordion title="streamline-json">
+    Normalizes and compacts JSON config files.
+
+    ```bash
+    passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos10.json
+    ```
+  </Accordion>
+  <Accordion title="candle-doctor">
+    Audits `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues. Add `--fix` to apply automatic repairs.
+
+    ```bash
+    passivbot tool candle-doctor
+    passivbot tool candle-doctor --fix
+    ```
+  </Accordion>
+  <Accordion title="migrate-historical-data">
+    Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
+
+    ```bash
+    passivbot tool migrate-historical-data
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Fill events tools
+
+### fill-events-dash
+
+Launches a Dash UI for inspecting cached fill-event history, PnL, symbol-level details, cache health, and CSV export.
+
+```bash
+passivbot tool fill-events-dash --users bybit_01
+```
+
+### fill-events-doctor
+
+Audits cached fill-event anomalies. Add `--repair` to apply automatic repairs.
+
+```bash
+passivbot tool fill-events-doctor --exchange bybit --user bybit_01
+passivbot tool fill-events-doctor --exchange bybit --user bybit_01 --repair
+```
+
+## Monitor tools
+
+The monitor subcommands are documented in detail in the Monitor guide. The CLI surface is:
+
+- `passivbot tool monitor-relay`
+- `passivbot tool monitor-web`
+- `passivbot tool monitor-tui`
+- `passivbot tool monitor-dev`
+
+## Exchange helpers
+
+### fetch-balance
+
+A lightweight credential smoke test that loads one user from `api-keys.json`, instantiates the matching ccxt exchange, and prints the raw balance payload.
+
+```bash
+passivbot tool fetch-balance --user bybit_01
+```
+
+### Hyperliquid probes
+
+These probes were added to investigate live Hyperliquid balance and state behavior, especially HIP-3 stock perps. They are intended for reuse in future live diagnostics rather than creating new one-off scripts.
+
+<Warning>
+  The mutating probes (`hyperliquid-order-margin-probe` and `hyperliquid-position-probe`) require `--yes` and are intended for test wallets or deliberately tiny live positions only.
+</Warning>
+
+| Probe | Type | Description |
+|-------|------|-------------|
+| `hyperliquid-balance-probe` | Read-only | Fetches one wallet balance and prints a normalized summary |
+| `hyperliquid-order-margin-probe` | Mutating | Places one tiny post-only order, snapshots balance changes, then cancels it |
+| `hyperliquid-position-probe` | Mutating | Opens or flattens a tiny position and optionally places resting entry or reduce-only close orders |
+
+```bash
+# Read-only balance summary
+passivbot tool hyperliquid-balance-probe --user hyperliquid_01
+
+# Inspect margin impact of a resting order
+passivbot tool hyperliquid-order-margin-probe \
+  --user hyperliquid_01 \
+  --symbol BTC/USDC:USDC \
+  --yes
+
+# Inspect live position-margin behavior
+passivbot tool hyperliquid-position-probe \
+  --user hyperliquid_01 \
+  --symbol XYZ-SP500/USDC:USDC \
+  --yes
+
+# Flatten an existing position
+passivbot tool hyperliquid-position-probe \
+  --user hyperliquid_01 \
+  --symbol XYZ-SP500/USDC:USDC \
+  --flatten-only \
+  --yes
+```
+
+Recommended usage order: start with `hyperliquid-balance-probe` to confirm the wallet and baseline balance fields, then use `hyperliquid-order-margin-probe` to inspect how a resting order changes `accountValue` and `withdrawable`, and only use `hyperliquid-position-probe` when you need to inspect live position-margin behavior or startup-state handling.
+
+## Market cap list generator
+
+`passivbot tool generate-mcap-list` emits a JSON list of coins filtered by market cap rank and optionally by exchange availability.
+
+```bash
+passivbot tool generate-mcap-list -n 80 -m 200 -e binance,bybit -o configs/approved_coins_top80.json
+```
+
+| Flag | Description |
+|------|-------------|
+| `-n` | Number of coins to include in the output list |
+| `-m` | Market cap rank cutoff (coins ranked above this are excluded) |
+| `-e` | Comma-separated list of exchanges to filter by availability |
+| `-o` | Output file path for the generated JSON list |

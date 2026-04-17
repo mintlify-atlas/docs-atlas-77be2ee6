@@ -1,0 +1,335 @@
+---
+title: "Live trading settings reference"
+description: "Full reference for config.live settings: approved coins, leverage, margin mode, order management, risk enforcers, warmup, and HSL signal mode."
+---
+
+`config.live` controls all live trading behavior: which coins to trade, how to size and submit orders, how to manage risk, and how to warm up indicator state before trading begins. Many of these settings are also respected by backtests and the optimizer (notably `approved_coins`, `ignored_coins`, and `market_orders_allowed`). Defaults come from `src/config/schema.py`.
+
+## Coin selection
+
+### `approved_coins`
+
+List of coins approved for trading. Accepted formats:
+
+```json
+"approved_coins": ["BTC", "ETH", "SOL"]
+```
+
+```json
+"approved_coins": "all"
+```
+
+```json
+"approved_coins": {
+  "long": ["BTC", "ETH"],
+  "short": ["BTC", "ETH", "SOL"]
+}
+```
+
+```json
+"approved_coins": {
+  "long": "all",
+  "short": ["BTC", "ETH"]
+}
+```
+
+The value `"all"` enables all eligible coins for the affected side. An empty value (`[]`, `{}`, `""`, or `null`) disables both sides. You can also point to an external file path that Passivbot reads continuously:
+
+```json
+"approved_coins": "configs/approved_coins.txt"
+```
+
+Backtests and the optimizer use `live.approved_coins` minus `live.ignored_coins`.
+
+### `ignored_coins`
+
+Coins the bot will not open new positions on. If an existing position is on an ignored coin, `auto_gs` determines whether graceful stop or manual mode is applied. Supports side-specific format:
+
+```json
+"ignored_coins": {
+  "long": ["COIN1", "COIN2"],
+  "short": ["COIN2", "COIN3"]
+}
+```
+
+Can also be a path to an external file read continuously.
+
+**Default:** `{"long": [], "short": []}`
+
+### `minimum_coin_age_days`
+
+Disallows coins younger than this many days. Protects against newly listed coins with limited price history.
+
+**Default:** `365`
+
+### `filter_by_min_effective_cost`
+
+When `true`, skip coins where the projected initial entry cost falls below the exchange's effective minimum order cost:
+
+```
+if balance * wallet_exposure_limit * entry_initial_qty_pct < min_effective_cost:
+    skip coin
+```
+
+Example: if the exchange minimum is `$5` but the bot would only send a `$2` order, that coin is skipped.
+
+**Default:** `true`
+
+### `auto_gs`
+
+When `true`, coins that disappear from `approved_coins` are automatically put into graceful stop (the bot finishes managing the current position without opening new ones). When `false`, those coins are put into manual mode instead.
+
+**Default:** `true`
+
+---
+
+## Position management
+
+### `leverage`
+
+Leverage set on the exchange for new positions. This does not affect Passivbot's internal risk calculations, which always use the unleveraged wallet balance. Set this high enough to support the total wallet exposure you configure:
+
+```
+Exchange leverage > total_wallet_exposure_limit_long + total_wallet_exposure_limit_short
+```
+
+**Default:** `10`
+
+### `hedge_mode`
+
+When `true`, requests simultaneous long and short positions on the same coin. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the bot runs one-way even when this is `true`.
+
+**Default:** `false`
+
+### `margin_mode_preference`
+
+Preferred margin mode for new entries when a symbol supports both cross and isolated.
+
+| Value | Behavior |
+|---|---|
+| `auto` / `auto_cross` | Prefer cross when both modes are available. |
+| `auto_isolated` | Prefer isolated when both modes are available. |
+| `cross` | Require cross for new entries; isolated-only symbols are skipped for new entries but existing positions remain manageable. |
+| `isolated` | Require isolated for new entries; cross-only symbols are skipped for new entries but existing positions remain manageable. |
+
+If the exchange reports an already-open position or open orders on a symbol, the live bot preserves that symbol's actual live margin mode instead of forcing the preference mid-position.
+
+<Note>
+Hyperliquid HIP-3 exception: isolated HIP-3 live trading is currently unsupported. Cross-capable HIP-3 markets are forced to cross for new entries; isolated-only HIP-3 markets are skipped; existing isolated HIP-3 state causes startup to fail loudly.
+</Note>
+
+**Default:** `"cross"`
+
+### `forced_mode_long` / `forced_mode_short`
+
+Force all coins on a given side to one trading mode. Accepted values: `m` (manual), `gs` (graceful_stop), `p` (panic), `t` (tp_only). Leave empty (`""`) for normal operation.
+
+**Default:** `""` (normal operation)
+
+---
+
+## Order execution
+
+### `execution_delay_seconds`
+
+Seconds to wait after submitting an order batch to the exchange before the next execution cycle.
+
+**Default:** `2`
+
+### `market_orders_allowed`
+
+When `true`, Passivbot may place market orders when an order price is very close to the current market price. When `false`, only limit orders are placed.
+
+**Default:** `false`
+
+### `market_order_near_touch_threshold`
+
+Fractional distance threshold for promoting a limit order to a market order when `market_orders_allowed = true`.
+
+Decision rules:
+- Non-panic buy with `price >= market_price` → market
+- Non-panic sell with `price <= market_price` → market
+- `abs(order_price - market_price) / market_price <= threshold` → market
+- Otherwise → limit
+- Panic closes are controlled separately by `bot.{long,short}.hsl_panic_close_order_type`
+
+Backtests always inherit `live.market_orders_allowed` and `live.market_order_near_touch_threshold`.
+
+**Default:** `0.001`
+
+### `time_in_force`
+
+Order time-in-force policy for limit orders.
+
+**Default:** `"good_till_cancelled"`
+
+### `max_n_cancellations_per_batch`
+
+Maximum number of open orders cancelled per execution cycle.
+
+**Default:** `5`
+
+### `max_n_creations_per_batch`
+
+Maximum number of new orders created per execution cycle.
+
+**Default:** `3`
+
+### `order_match_tolerance_pct`
+
+Tolerance (in fraction) for matching near-identical cancel/create pairs to avoid unnecessary order churn. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling and replacing it.
+
+**Default:** `0.0002`
+
+---
+
+## Risk settings
+
+### `risk_wel_enforcer_threshold`
+
+Per-symbol multiplier that triggers the WEL enforcer. When a position's exposure exceeds:
+
+```
+wallet_exposure_limit * (1 + risk_we_excess_allowance_pct) * risk_wel_enforcer_threshold
+```
+
+the bot emits a reduce-only order to trim it back. Set `<= 0` to disable.
+
+Examples:
+- `0.9` — Proactive trimming; keeps positions at 90% of their allowance.
+- `1.0` — Hard cap; trims immediately at the effective limit.
+- `1.05` — Trims only when position exceeds effective limit by 5%.
+
+**Default:** `0.994` (long)
+
+### `risk_twel_enforcer_threshold`
+
+Fraction of `total_wallet_exposure_limit` that triggers the portfolio-level TWEL enforcer. When aggregate exposure exceeds this threshold, the bot queues reduction orders instead of new entries (reducing the least underwater positions first). Set `<= 0` to disable.
+
+**Default:** `1` (long)
+
+### `risk_we_excess_allowance_pct`
+
+Per-symbol allowance above the configured wallet exposure limit that the WEL enforcer tolerates before trimming. A value of `0.37` allows a position to reach 137% of `wallet_exposure_limit` before the enforcer triggers. Leave at `0.0` for a hard cap.
+
+```
+effective_limit = wallet_exposure_limit * (1 + risk_we_excess_allowance_pct)
+```
+
+**Default:** `0.37` (long)
+
+### `max_realized_loss_pct`
+
+Global realized-loss gate for all close order types (except panic closes). Anchored to the peak realized balance from fill history:
+
+```
+balance_floor = peak_balance * (1 - max_realized_loss_pct)
+```
+
+Close orders that would push balance below `balance_floor` are blocked.
+
+- `<= 0.0` — Block all lossy closes.
+- `0.0 < value < 1.0` — Allow losses only down to the configured fraction below peak balance.
+- `>= 1.0` — Disabled (default).
+
+Example: peak balance `$10,000`, `max_realized_loss_pct = 0.05` → closes blocked once projected balance would fall below `$9,500`.
+
+**Default:** `1.0` (disabled)
+
+### `hsl_signal_mode`
+
+Selects whether HSL drawdown is tracked per-side or from a unified account-level signal.
+
+- `"pside"` — Each side controller uses its own realized/unrealized strategy PnL.
+- `"unified"` — Long and short keep separate HSL controllers but both are fed from the same account-level strategy signal.
+
+**Default:** `"unified"`
+
+### `hsl_position_during_cooldown_policy`
+
+Live-only policy for a position that appears on a halted side during HSL RED cooldown:
+
+| Value | Behavior |
+|---|---|
+| `panic` | Panic-close the new position and restart the cooldown timer from that new flatten. |
+| `normal` | Treat it as an explicit operator override; clear the halt once the position appears and restart HSL tracking from current state. While flat, blocks fresh initials. |
+| `manual` | Leave the position in manual mode; keep the original cooldown running and block fresh initials. |
+| `tp_only` | Keep the original cooldown running, block new entries, allow only close management. |
+| `graceful_stop` | Keep the original cooldown running, manage any existing position with graceful-stop semantics, block fresh initials. |
+
+**Default:** `"panic"`
+
+---
+
+## Network and stability
+
+### `max_n_restarts_per_day`
+
+If the bot crashes, restart up to this many times per day before stopping completely.
+
+**Default:** `10`
+
+### `max_ohlcv_fetches_per_minute`
+
+Live OHLCV network budget for candle-backed indicators. Set lower to reduce REST pressure; set to `0` to disallow new fetches and rely only on cached data.
+
+**Default:** `30`
+
+### `recv_window_ms`
+
+Millisecond tolerance for authenticated REST calls. Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
+
+**Default:** `5000`
+
+### `max_concurrent_api_requests`
+
+Optional global live REST concurrency cap. Leave `null` to use exchange/default behavior; set a positive integer to throttle request fan-out.
+
+**Default:** `null`
+
+### `balance_override`
+
+Optional numeric override for the wallet balance used by the live bot. When set, the bot does not fetch balance from the exchange. Useful for dry-runs, debugging, or when using BTC collateral and you want to maintain a fixed USD-denominated sizing baseline.
+
+**Default:** `null`
+
+### `balance_hysteresis_snap_pct`
+
+Hysteresis snap percentage applied to balance updates to reduce noise from small fluctuations. Set to `0.0` to disable.
+
+**Default:** `0.01`
+
+### `pnls_max_lookback_days`
+
+How far into the past to fetch PnL history. Also feeds the rolling realized-PnL window used by live risk logic and backtests.
+
+- `0` — Minimal lookback at native sampling resolution.
+- `> 0` — Rolling window of that many days.
+- `"all"` — Full available history.
+
+**Default:** `30`
+
+---
+
+## Warmup
+
+Before trading begins, Passivbot prefetches historical 1m OHLCV data to warm up EMA and volatility indicators.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `warmup_ratio` | `0.3` | Multiplier on the longest EMA or log-range span (in minutes) to determine how much history to prefetch. `0.3` prefetches ~30% of the deepest indicator lookback. |
+| `max_warmup_minutes` | `0` | Hard ceiling on the warmup window. `0` disables the cap. Values above `0` clamp the per-symbol warmup calculated from EMA spans. |
+| `warmup_jitter_seconds` | `30` | Random startup delay spread applied before warmup begins. Prevents multiple bots from stampeding the same cache files and APIs simultaneously. |
+| `warmup_concurrency` | `0` | Concurrency cap for warmup tasks. `0` lets Passivbot auto-select. |
+
+---
+
+## Memory and cache
+
+| Parameter | Default | Description |
+|---|---|---|
+| `max_memory_candles_per_symbol` | `200000` | Maximum 1m candles retained in RAM per symbol. Older entries are trimmed once the cap is exceeded. |
+| `max_disk_candles_per_symbol_per_tf` | `2000000` | Maximum candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit. |
+| `candle_lock_timeout_seconds` | `10` | Seconds to wait when another process holds the per-symbol candle fetch lock. Increase when running many bots sharing the same cache directory. |
+| `inactive_coin_candle_ttl_minutes` | `10` | How long 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. |
+| `enable_archive_candle_fetch` | `false` | Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically need the live bot to supplement its local candle state from exchange archive endpoints. |

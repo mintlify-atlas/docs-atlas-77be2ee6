@@ -1,0 +1,155 @@
+---
+title: "Passivbot trading strategy: grid, trailing, and EMA"
+description: "How Passivbot's contrarian market maker strategy works: grid entries, trailing orders, take-profit logic, and the trailing_grid_ratio parameter."
+---
+
+Passivbot is a contrarian market maker: it does not predict price direction, use technical indicators, or follow trends. Inspired by the Martingale betting strategy, it makes a small initial entry, then doubles down on losing positions multiple times to bring the average entry price closer to current price action. Orders are placed in a grid, ready to absorb sudden price movements. After each re-entry, the bot updates its closing orders at a configured take-profit markup, so even a minor market reversal can close the position at a profit.
+
+## Core strategy
+
+A typical position lifecycle looks like this:
+
+1. **Initial entry** — the bot opens a small position when price crosses below the lower EMA band (long) or above the upper EMA band (short).
+2. **Re-entries** — as price moves against the position, the bot adds to it via grid or trailing orders, lowering (long) or raising (short) the average entry price.
+3. **Take-profit close** — once price reverses, the bot fills limit closes at a markup above (long) or below (short) the average entry price.
+
+Both re-entries and closes can be pure grid, pure trailing, or a blend of both, controlled by `trailing_grid_ratio`.
+
+## Grid entries
+
+Grid re-entries use fixed spacing derived from the current position price and several parameters.
+
+**Spacing formula:**
+
+```text
+next_reentry_price_long  = pos_price * (1 - entry_grid_spacing_pct * multiplier)
+next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)
+
+multiplier = 1 + (wallet_exposure / wallet_exposure_limit) * entry_grid_spacing_we_weight
+               + log_component
+```
+
+The `log_component` is driven by `entry_grid_spacing_volatility_weight` and the EMA of the per-candle log range `ln(high/low)`, controlled by `entry_volatility_ema_span_hours`. Setting the volatility weight to `0` disables the volatility adjustment.
+
+**Key grid entry parameters:**
+
+| Parameter | Description |
+|---|---|
+| `entry_grid_spacing_pct` | Base percentage distance between grid levels |
+| `entry_grid_spacing_we_weight` | Widens spacing as exposure approaches the limit when positive |
+| `entry_grid_double_down_factor` | Quantity multiplier for each successive re-entry |
+| `entry_initial_qty_pct` | Size of the initial entry as a fraction of the wallet exposure limit |
+
+**Initial entry cost formula:**
+
+```text
+initial_entry_cost = balance * wallet_exposure_limit * entry_initial_qty_pct
+```
+
+**Double-down example:** if the current position size is `1.4` and `entry_grid_double_down_factor = 0.9`, the next grid entry quantity is `1.4 × 0.9 = 1.26`.
+
+## Trailing entries
+
+Instead of a fixed grid level, a trailing entry fires only after price moves past a threshold and then retraces by a defined percentage.
+
+**Trigger conditions (long):**
+
+```text
+condition 1: highest_price_since_position_change > pos_price * (1 + entry_trailing_threshold_pct)
+condition 2: current_price < highest_price * (1 - entry_trailing_retracement_pct)
+```
+
+Both conditions must be true for the order to fire. If `entry_trailing_threshold_pct <= 0.0`, condition 1 is always considered met.
+
+**Key trailing entry parameters:**
+
+| Parameter | Description |
+|---|---|
+| `entry_trailing_threshold_pct` | Minimum favorable move before tracking a pullback |
+| `entry_trailing_retracement_pct` | Required pullback from the extreme before entry fires |
+| `entry_trailing_double_down_factor` | Controls how aggressively successive trailing re-entries grow in size |
+
+<Note>
+Passivbot tracks its own trailing prices internally and does not use exchange-native trailing order types. The trailing price tracker resets whenever the position changes (entry or partial close). Tracking is updated on each new 1-minute candle.
+</Note>
+
+## Grid closes
+
+Take-profit (TP) orders are placed in a grid linearly spaced between two markup levels.
+
+**TP price ranges:**
+
+```text
+long:  pos_price * (1 + markup_start)  to  pos_price * (1 + markup_end)
+short: pos_price * (1 - markup_start)  to  pos_price * (1 - markup_end)
+```
+
+When `markup_start > markup_end` the grid is built backwards (starting at the higher markup and stepping inward). When `markup_start < markup_end` the grid is built forwards.
+
+**Quantity per TP level:**
+
+```text
+qty_per_level = full_pos_size * close_grid_qty_pct
+```
+
+**Example (long, backwards TP):** with `pos_price = 100`, `markup_start = 0.01`, `markup_end = 0.005`, and `close_grid_qty_pct = 0.2`, the TP prices are `[101.0, 100.9, 100.8, 100.7, 100.6]`.
+
+| Parameter | Description |
+|---|---|
+| `close_grid_markup_start` | Markup of the first (nearest) TP level |
+| `close_grid_markup_end` | Markup of the last (farthest) TP level |
+| `close_grid_qty_pct` | Fraction of full position size closed at each TP level |
+
+## Trailing closes
+
+Like trailing entries, trailing closes fire only after a favorable move followed by a retracement.
+
+**Trigger conditions (long):**
+
+```text
+condition 1: highest_price_since_position_change > pos_price * (1 + close_trailing_threshold_pct)
+condition 2: current_price < highest_price * (1 - close_trailing_retracement_pct)
+```
+
+| Parameter | Description |
+|---|---|
+| `close_trailing_threshold_pct` | Minimum favorable move before tracking a pullback |
+| `close_trailing_retracement_pct` | Required pullback from the extreme before close fires |
+| `close_trailing_qty_pct` | Close quantity as a fraction of full position size |
+
+## Mixing grid and trailing with `trailing_grid_ratio`
+
+The `trailing_grid_ratio` parameter controls what portion of the position uses trailing vs. grid orders for both entries and closes. The same parameter applies to both sides.
+
+| Value | Behavior |
+|---|---|
+| `0.0` | Grid orders only |
+| `1.0` or `-1.0` | Trailing orders only |
+| `0.3` | Trailing orders until the position is 30% full, then grid for the remainder |
+| `-0.9` | Grid orders until the position is 10% full `(1 - 0.9)`, then trailing for the remainder |
+| `-0.12` | Grid orders until the position is 88% full `(1 - 0.12)`, then trailing |
+
+**Sign convention:**
+- **Positive** `trailing_grid_ratio`: trailing first, grid second.
+- **Negative** `trailing_grid_ratio`: grid first, trailing second.
+
+The `close_trailing_grid_ratio` parameter applies the same logic to closing orders independently.
+
+## EMA bands and initial entry gating
+
+Initial entries are gated by EMA bands computed from two configurable spans:
+
+```text
+alpha_0 = 2 / (ema_span_0 + 1)
+alpha_1 = 2 / (ema_span_1 + 1)
+alpha_2 = 2 / (sqrt(ema_span_0 * ema_span_1) + 1)
+
+ema_band_lower = min(ema_0, ema_1, ema_2)
+ema_band_upper = max(ema_0, ema_1, ema_2)
+```
+
+Long initial entries require price to be below the lower band offset by `entry_initial_ema_dist`. Short initial entries require price to be above the upper band offset by `entry_initial_ema_dist`. The same EMA bands gate auto-unstuck close prices.
+
+<Tip>
+Wider EMA spans produce smoother, slower-moving bands. Tighter bands (smaller spans) react faster to price changes and can allow initial entries more frequently.
+</Tip>

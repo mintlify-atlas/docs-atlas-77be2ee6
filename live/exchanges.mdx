@@ -1,0 +1,133 @@
+---
+title: "Supported exchanges and setup"
+description: "Passivbot supports Bybit, Bitget, OKX, GateIO, Binance, Kucoin, and Hyperliquid for live perpetual futures trading. Setup notes per exchange."
+---
+
+Passivbot supports seven exchanges for live trading, all focused on perpetual futures markets. Each exchange has its own account setup requirements, API key format, and margin mode behavior. The sections below cover exchange-specific notes you need before running the bot live.
+
+## Exchange overview
+
+| Exchange | Passphrase required | Notes |
+|---|---|---|
+| Bybit | No | Standard key/secret |
+| Bitget | Yes | Requires passphrase at key creation |
+| OKX | Yes | Requires passphrase at key creation |
+| GateIO | No | Standard key/secret |
+| Binance | No | Referral requirement for commissions; see note below |
+| Kucoin | Yes | Requires passphrase at key creation |
+| Hyperliquid | No | Wallet address + API wallet private key; USDC only |
+
+## Hyperliquid
+
+Hyperliquid uses a non-custodial on-chain model. Setup is more involved than CEX exchanges.
+
+### Account setup
+
+<Steps>
+  <Step title="Create an account">
+    Go to [app.hyperliquid.xyz](https://app.hyperliquid.xyz/) and sign in by connecting a third-party wallet (more secure) or using email (less secure).
+  </Step>
+  <Step title="Deposit USDC">
+    Click **Deposit** and transfer **USDC** via the Arbitrum network to your account address.
+
+    <Warning>
+      Hyperliquid uses **USDC only** — not USDT, USDC.e, or any other stablecoin. Depositing the wrong asset will not fund your trading account.
+    </Warning>
+  </Step>
+  <Step title="Create an API wallet">
+    Navigate to **More** → **API** and follow the instructions to create an API wallet (also called an agent wallet). This API wallet's private key is what you supply as `private_key` in `api-keys.json`.
+
+    Do not use the private key of your main wallet.
+  </Step>
+  <Step title="Add credentials to api-keys.json">
+    ```json
+    "hyperliquid_01": {
+      "exchange": "hyperliquid",
+      "wallet_address": "YOUR_USDC_PUBLIC_WALLET_ADDRESS",
+      "private_key": "API_PRIVATE_KEY",
+      "is_vault": false
+    }
+    ```
+  </Step>
+  <Step title="Start the bot">
+    ```bash
+    passivbot live -u hyperliquid_01
+    ```
+
+    Note that Hyperliquid enforces a minimum order size of $10. Make sure your config's initial entry cost meets this threshold:
+
+    ```
+    initial_entry_cost = balance × (total_wallet_exposure_limit / n_positions) × entry_initial_qty_pct
+    ```
+  </Step>
+</Steps>
+
+### Vault setup (CopyTrading-like)
+
+Hyperliquid Vaults allow followers to copy your bot's positions. To run Passivbot against a vault:
+
+<Steps>
+  <Step title="Create a vault">
+    In Hyperliquid, navigate to **Vaults** in the top menu and create a new vault. Set a name and description (maximum 250 characters).
+  </Step>
+  <Step title="Find the vault address">
+    Navigate to **Vaults** again, find your vault in the public list, click on it, and copy the vault's public address.
+  </Step>
+  <Step title="Update api-keys.json">
+    Use the vault's public address as `wallet_address` and set `is_vault` to `true`:
+
+    ```json
+    "hyperliquid_01": {
+      "exchange": "hyperliquid",
+      "wallet_address": "YOUR_VAULT_PUBLIC_ADDRESS",
+      "private_key": "API_PRIVATE_KEY",
+      "is_vault": true
+    }
+    ```
+  </Step>
+</Steps>
+
+## Binance
+
+<Note>
+  To support continued Passivbot development, use a Binance account that was created after 2024-09-21 and either was created without a referral link, or was created with referral ID `TII4B07C`. Passivbot receives trade commissions only from accounts meeting these criteria.
+</Note>
+
+Standard key/secret credentials with futures trading permissions. No passphrase is required.
+
+## Hedge mode
+
+Hedge mode allows simultaneous long and short positions on the same coin. To enable it, set `live.hedge_mode` to `true` in your config:
+
+```json
+"live": {
+  "hedge_mode": true
+}
+```
+
+The effective behavior is `config.live.hedge_mode AND exchange_capability`. On exchanges that only support one-way mode, the bot runs one-way regardless of this setting.
+
+Hedge mode must typically be enabled in the exchange account settings before Passivbot can use it. Check each exchange's futures settings panel to toggle the position mode.
+
+## Margin mode
+
+Use `live.margin_mode_preference` to control whether the bot prefers cross or isolated margin for new positions:
+
+| Value | Behavior |
+|---|---|
+| `auto` / `auto_cross` | Prefer cross margin when both modes are available |
+| `auto_isolated` | Prefer isolated margin when both modes are available |
+| `cross` | Require cross for new entries; skip isolated-only symbols for new entries |
+| `isolated` | Require isolated for new entries; skip cross-only symbols for new entries |
+
+```json
+"live": {
+  "margin_mode_preference": "auto_cross"
+}
+```
+
+If a position or open orders already exist on a symbol, the bot preserves that symbol's actual live margin mode rather than forcing the configured preference mid-position.
+
+<Note>
+  Hyperliquid HIP-3 markets have a specific restriction: isolated HIP-3 live trading is not supported. Cross-capable HIP-3 markets are forced to cross for new entries, isolated-only HIP-3 markets are skipped, and existing isolated HIP-3 live state causes startup to fail loudly.
+</Note>

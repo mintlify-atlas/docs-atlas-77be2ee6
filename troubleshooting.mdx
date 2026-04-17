@@ -1,0 +1,194 @@
+---
+title: "Troubleshoot common Passivbot issues"
+description: "Solutions for common Passivbot setup and runtime errors: wrong command path, missing Rust extension, optimizer install issues, and build failures."
+---
+
+Most Passivbot setup problems fall into a small set of categories: shell path caching after reinstallation, missing or stale Rust extension builds, incomplete install profiles, and an outdated Rust toolchain. The accordion below covers each issue with the exact commands needed to resolve it.
+
+<AccordionGroup>
+  <Accordion title="`passivbot` runs the wrong command after reinstalling or switching environments">
+    **Symptoms:**
+    - `venv/bin/passivbot ...` behaves differently from `passivbot ...`
+    - `passivbot -h` still shows old help output after reinstalling
+    - `passivbot` appears to ignore changes from the current checkout
+
+    Your shell is resolving a different `passivbot` executable than the one inside the active virtualenv. This is common with `pyenv`, multiple virtualenvs, or shells that cache command paths.
+
+    Check which executable is being used:
+
+    ```bash
+    type -a passivbot
+    command -v passivbot
+    python -c "import sys; print(sys.executable)"
+    ```
+
+    Both `command -v passivbot` and the Python executable should point to the active venv, for example `/path/to/passivbot/venv/bin/passivbot`.
+
+    If either points elsewhere, refresh the shell's command lookup:
+
+    ```bash
+    hash -r
+    ```
+
+    For `zsh` or `tcsh`, also run:
+
+    ```bash
+    rehash
+    ```
+
+    If that is not enough, reactivate the venv:
+
+    ```bash
+    deactivate
+    source venv/bin/activate
+    hash -r
+    ```
+
+    For `pyenv` users, refresh shims as well:
+
+    ```bash
+    pyenv which passivbot
+    pyenv rehash
+    ```
+
+    To confirm the current checkout is correct, compare the two help outputs:
+
+    ```bash
+    venv/bin/passivbot optimize -h | head -40
+    passivbot optimize -h | head -40
+    ```
+
+    If the first is correct and the second is not, the problem is shell path resolution, not Passivbot itself.
+  </Accordion>
+
+  <Accordion title="`passivbot optimize requires the full Passivbot install`">
+    The optimizer depends on packages not included in the default install profile. Install the full profile:
+
+    ```bash
+    python3 -m pip install -e ".[full]"
+    ```
+  </Accordion>
+
+  <Accordion title="`passivbot_rust` missing or stale">
+    Activate the venv and rebuild the Rust extension:
+
+    ```bash
+    source venv/bin/activate
+    maturin develop --release
+    ```
+
+    If you recently pulled new commits, also refresh the Python install:
+
+    ```bash
+    python3 -m pip install -e .
+    ```
+
+    Use `.[full]` or `.[dev]` if you need the full or developer install profile.
+  </Accordion>
+
+  <Accordion title="pip install fails with feature edition2024 is required">
+    This is a Rust toolchain issue, not a Python dependency issue. If the Rust build logs include errors like `feature edition2024 is required`, `cargo metadata ... failed`, or `failed to parse manifest`, your local Cargo is too old for the crates it resolved during the build.
+
+    Check your toolchain version:
+
+    ```bash
+    cargo --version
+    rustc --version
+    ```
+
+    Update to the current stable toolchain and retry:
+
+    ```bash
+    rustup update stable
+    python3 -m pip install -e ".[full]"
+    ```
+
+    <Note>
+      If Rust was installed from system packages instead of `rustup`, prefer switching to the `rustup`-managed toolchain.
+    </Note>
+  </Accordion>
+
+  <Accordion title="`maturin develop` says it could not find a virtualenv or conda environment">
+    This usually means the build is running outside the project venv. Activate it first and verify the interpreter:
+
+    ```bash
+    source venv/bin/activate
+    which python
+    python -m pip --version
+    ```
+
+    `which python` should point to `.../venv/bin/python`. Then rerun:
+
+    ```bash
+    maturin develop --release
+    ```
+
+    If you still see the wrong interpreter, recreate the venv from a Python 3.12 install and reinstall Passivbot inside that venv.
+  </Accordion>
+
+  <Accordion title="`linker cc not found` or `cannot find crt1.o`">
+    The C build tools are missing. Install them and the Python development headers:
+
+    ```bash
+    sudo apt install build-essential python3.12-dev
+    ```
+
+    On macOS, install the Xcode command-line tools:
+
+    ```bash
+    xcode-select --install
+    ```
+
+    Then rerun the Rust extension build:
+
+    ```bash
+    maturin develop --release
+    ```
+  </Accordion>
+
+  <Accordion title="`TypeError: unsupported operand type(s) for |`">
+    This error means you are running an unsupported Python version. Passivbot requires Python 3.12.
+
+    Install Python 3.12 (Debian/Ubuntu):
+
+    ```bash
+    sudo apt install python3.12 python3.12-venv python3.12-dev
+    ```
+
+    Then recreate the venv with the correct interpreter and reinstall:
+
+    ```bash
+    python3.12 -m venv venv
+    source venv/bin/activate
+    python3 -m pip install -e .
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting checklist
+
+If you are not sure which issue applies, match your symptom to the table below:
+
+| Symptom | Fix |
+|---|---|
+| `ModuleNotFoundError: passivbot_rust…` | Activate the venv or rerun `maturin develop --release`. |
+| `passivbot optimize requires the full Passivbot install` | Install the full profile: `pip install -e ".[full]"`. |
+| `venv/bin/passivbot` works but `passivbot` behaves differently | Run `command -v passivbot`, then refresh with `hash -r` and `rehash`. |
+| `linker cc not found` / `cannot find crt1.o` | Install `build-essential` and `python3.12-dev`. |
+| `rustup: command not found` | Install Rust via [rustup.rs](https://rustup.rs/). |
+| `feature edition2024 is required` during the Rust build | Update Rust with `rustup update stable`, then retry `pip install -e ".[full]"`. |
+| `maturin develop` can't find Python | Activate the venv — `which python` should point to `venv/bin/python`. |
+| `TypeError: unsupported operand type(s) for \|` | Install Python 3.12 and recreate the venv with `python3.12 -m venv venv`. |
+
+## Still stuck?
+
+If none of the above resolves your issue, collect the full error log along with your OS, Python version (`python --version`), and Rust version (`rustc --version`), then:
+
+<CardGroup cols={2}>
+  <Card title="Join the Discord" icon="discord" href="https://discord.gg/passivbot">
+    Ask in the support channel and share your error output.
+  </Card>
+  <Card title="Open a GitHub issue" icon="github" href="https://github.com/enarjord/passivbot/issues">
+    File a bug report with full reproduction steps and environment details.
+  </Card>
+</CardGroup>

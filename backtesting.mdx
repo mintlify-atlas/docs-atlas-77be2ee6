@@ -1,0 +1,214 @@
+---
+title: "Backtesting with Passivbot"
+description: "Replay historical 1-minute OHLCV data to evaluate Passivbot configurations. Covers basic runs, suite mode, exchange comparison, and data management."
+---
+
+The Passivbot backtester replays historical 1-minute OHLCV candles to evaluate how a configuration would have performed over a given time window and coin set. When data is not cached locally, the backtester fetches it from exchange archives and stores it under `caches/ohlcv/` for reuse. Backtesting requires the full install profile.
+
+<Info>
+  Install the full profile before running backtests:
+
+  ```bash
+  pip install -e ".[full]"
+  ```
+</Info>
+
+## Basic usage
+
+Run a backtest with no arguments to use the in-code schema defaults from `src/config/schema.py`:
+
+```bash
+passivbot backtest
+```
+
+To use a specific config file:
+
+```bash
+passivbot backtest path/to/config.json
+```
+
+The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors the schema defaults exactly. For the recommended way to copy and customize configs, see the Config Workflow guide.
+
+For a full list of CLI arguments:
+
+```bash
+passivbot backtest -h
+```
+
+## Backtest results
+
+Standalone runs write metrics and plots to:
+
+```
+backtests/{exchange}/timestamp/
+```
+
+Suite runs collect everything under:
+
+```
+backtests/suite_runs/<timestamp>/<scenario_label>/
+```
+
+Suite runs also produce a top-level `suite_summary.json` that contains per-scenario metrics and the aggregated statistics defined in `backtest.aggregate`. Each scenario entry exposes `metrics.stats[metric] = {mean, min, max, std}` so you can inspect exchange-combined performance without opening individual `analysis.json` files.
+
+## CLI flags
+
+| Flag | Description |
+|------|-------------|
+| `-dp` / `--disable_plotting [GROUP]` | Disable plot groups. Omit the value to disable all. Accepted groups: `all`, `summary`, `balance`, `twe`, `pnl`, `coin_fills`, or a comma-separated combination. |
+| `--suite [y/n]` | Override `backtest.suite_enabled`. Omit the value to enable (e.g. `--suite`) |
+| `--scenarios label1,label2,...` | Run only specific scenarios by label; implies `--suite y` |
+| `--suite-config path/to/overrides.json` | Merge an additional suite definition onto the base config |
+
+The canonical default profile keeps `backtest.suite_enabled = false`. A normal backtest run is a single run unless you explicitly enable suite mode in the config or via `--suite`.
+
+## Pre-downloading OHLCV data
+
+Use `passivbot download` to warm the OHLCV cache before a long backtest or optimize run. It uses the same `backtest.start_date`, `backtest.end_date`, `backtest.exchanges`, and approved-coin selection flow as the backtester, but stops after preparing cache data.
+
+```bash
+passivbot download configs/examples/default_trailing_grid_long_npos10.json
+passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
+```
+
+## External OHLCV source directory
+
+You can point `backtest.ohlcv_source_dir` at a pre-populated OHLCV tree. The loader looks for files under:
+
+```
+<ohlcv_source_dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz
+<ohlcv_source_dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npy
+```
+
+`<coin_or_symbol>` accepts base coins (e.g., `ETH`) or CCXT-style symbol dirs (e.g., `ETH_USDC:USDC`).
+
+For `.npz` files, the archive must contain a `candles` key with a structured NumPy array having fields `ts` (int64 timestamp), `o` (open), `h` (high), `l` (low), `c` (close), `bv` (base volume). Timestamps must be in milliseconds. For `.npy` files, the array should have columns `[timestamp, open, high, low, close, volume]`.
+
+## Suite mode
+
+Suite mode evaluates multiple scenario slices in a single invocation. It is disabled by default and should only be enabled when you deliberately want multi-scenario evaluation.
+
+Enable suite mode via the `--suite` CLI flag or in your config:
+
+```json
+{
+  "backtest": {
+    "suite_enabled": true,
+    "scenarios": [...],
+    "aggregate": {"default": "mean"},
+    "exchanges": ["binance", "bybit"]
+  }
+}
+```
+
+During a suite run, Passivbot prepares one master OHLCV dataset spanning the union of all scenario date ranges and coins, then slices it per scenario so repeated downloads are avoided.
+
+### Scenario configuration
+
+Each scenario in the `scenarios` list may override:
+
+| Key | Description |
+|-----|-------------|
+| `label` | Directory name inside `backtests/suite_runs/<timestamp>/` |
+| `coins` / `ignored_coins` | Coin selection for the scenario |
+| `start_date` / `end_date` | Date window for the scenario |
+| `exchanges` | Restricts which exchanges the scenario can see |
+| `coin_sources` | Force a specific exchange for individual coins |
+| `overrides` | Arbitrary config path overrides (e.g., `{"live.long.we": 0.5}`) |
+
+### Aggregation
+
+The `aggregate` key controls how per-scenario metrics are combined in `suite_summary.json`. The default is `{"default": "mean"}`. For risk metrics where the worst scenario matters most, use `"max"`:
+
+```json
+{
+  "aggregate": {
+    "default": "mean",
+    "drawdown_worst_hsl": "max",
+    "peak_recovery_hours_hsl": "max"
+  }
+}
+```
+
+### Full suite config example
+
+```json
+{
+  "backtest": {
+    "suite_enabled": true,
+    "aggregate": {"default": "mean"},
+    "exchanges": ["binance", "bybit"],
+    "scenarios": [
+      {"label": "base"},
+      {
+        "label": "twel_1_5",
+        "overrides": {
+          "bot.long.total_wallet_exposure_limit": 1.5
+        }
+      },
+      {
+        "label": "bear_2022",
+        "start_date": "2022-01-01",
+        "end_date": "2022-12-31"
+      }
+    ]
+  }
+}
+```
+
+## Exchange comparison
+
+To compare performance across exchanges, define one scenario per exchange using the scenario-level `exchanges` field:
+
+```json
+{
+  "backtest": {
+    "suite_enabled": true,
+    "aggregate": {"default": "mean"},
+    "exchanges": ["binance", "bybit", "gateio"],
+    "scenarios": [
+      {"label": "binance_only", "exchanges": ["binance"]},
+      {"label": "bybit_only", "exchanges": ["bybit"]},
+      {"label": "gateio_only", "exchanges": ["gateio"]}
+    ]
+  }
+}
+```
+
+Each scenario runs against only that exchange's data. The `suite_summary.json` will contain separate `metrics.stats` blocks for each exchange scenario.
+
+## Coin sources
+
+When multiple exchanges are configured (`backtest.exchanges` has more than one entry), the backtester combines OHLCV data and automatically selects the best exchange per coin based on coverage, gaps, and relative volume. To override that choice, add a `coin_sources` map:
+
+```json
+{
+  "backtest": {
+    "coin_sources": {
+      "BTC/USDT:USDT": "binance",
+      "SOL/USDT:USDT": "bybit"
+    }
+  }
+}
+```
+
+Suite scenarios can add more overrides under `coin_sources`. Conflicts between scenarios are rejected so every run uses a single consistent exchange assignment.
+
+## Supported exchanges
+
+The backtester supports OHLCV data from the following exchanges:
+
+| Exchange | Market |
+|----------|--------|
+| `binance` | Binance USDT-M Futures |
+| `bybit` | Bybit USDT Perpetuals |
+| `bitget` | Bitget USDT Perpetuals |
+| `gateio` | Gate.io USDT Perpetuals |
+
+The canonical default template uses `binance` and `bybit`. Add `bitget` and/or `gateio` explicitly in `backtest.exchanges` when you want them included.
+
+Cache paths and output directories use the short exchange names shown above (e.g., `binance`, `bybit`, `gateio`). The CCXT-specific suffixes (`binanceusdm`, `bybitusdt`) are only used internally when communicating with the exchange API.
+
+<Warning>
+  If you have existing GateIO OHLCV data in `caches/ohlcv/gateio`, delete the folder after upgrading to the new data strategy. Fresh data normalized to base volume will be fetched automatically on the next run.
+</Warning>

@@ -1,0 +1,249 @@
+---
+title: "Passivbot backtest and optimizer metrics reference"
+description: "Full reference for all Passivbot backtest metrics: returns, risk, efficiency ratios, position stats, equity curve quality, and HSL metrics."
+---
+
+Backtest statistics originate in the Rust engine (`passivbot-rust/src/analysis.rs`) and are augmented in Python (`src/backtest.py`). The optimizer aggregates them per exchange and then across all exchanges before scoring. Understanding each metric and its optimization direction is essential for building effective `optimize.scoring` and `optimize.limits` configurations.
+
+### Naming conventions
+
+<Note>
+  **`_w` suffix — recency-weighted variants:** Metrics ending in `_w` are computed by evaluating the
+  metric on ten overlapping trailing slices of the equity curve (full run, last 1/2, last 1/3, … last
+  1/10) and averaging the results. This biases the score toward recent performance without discarding
+  history.
+</Note>
+
+<Note>
+  **`_usd` / `_btc` denomination suffixes:** Currency-sensitive metrics (ADG, drawdowns, ratios)
+  are emitted with both `_usd` and `_btc` suffixes. `_usd` uses USD-denominated balance/equity.
+  `_btc` uses BTC-denominated balance/equity even when the backtest holds no BTC collateral — this
+  lets you compare strategy performance against passive BTC exposure. When you omit the suffix in
+  `optimize.limits` or `optimize.scoring`, USD is assumed by default.
+</Note>
+
+<Note>
+  **`_per_exposure_{long,short}` variants:** Many return and growth metrics have
+  exposure-normalized variants (e.g., `adg_per_exposure_long`) that divide the base metric by
+  the configured `total_wallet_exposure_limit` for that side. These let you compare bots that
+  use different leverage budgets on equal footing.
+</Note>
+
+---
+
+## Returns & growth
+
+These metrics measure raw growth of the equity curve over the backtest window.
+
+| Metric | Optimize direction | Description |
+|--------|--------------------|-------------|
+| `adg` | maximize | Average daily gain — the smoothed geometric daily return computed from `gain.powf(1 / n_days) - 1`, where terminal equity is the mean of the last up to three daily values. |
+| `adg_w` | maximize | Recency-weighted mean of `adg` across the trailing 10 slices. |
+| `mdg` | maximize | Median of daily percentage equity changes over the full run. |
+| `mdg_w` | maximize | Recency-weighted median daily gain across the trailing slices. |
+| `gain` | maximize | Terminal equity divided by starting equity (end/start ratio). |
+| `adg_strategy_pnl_rebased` | maximize | Collateral-agnostic geometric growth rate on the strategy-PnL rebased equity curve. Removes the effect of collateral appreciation/depreciation so you measure pure strategy returns. |
+| `adg_strategy_pnl_rebased_w` | maximize | Recency-weighted version of `adg_strategy_pnl_rebased`. |
+| `mdg_strategy_pnl_rebased` | maximize | Median-day version of strategy-PnL rebased growth. |
+| `mdg_strategy_pnl_rebased_w` | maximize | Recency-weighted median of strategy-PnL rebased growth. |
+| `adg_per_exposure_long` | maximize | `adg` divided by `total_wallet_exposure_limit` for the long side. |
+| `adg_per_exposure_short` | maximize | `adg` divided by `total_wallet_exposure_limit` for the short side. |
+| `adg_w_per_exposure_long` | maximize | `adg_w` divided by `total_wallet_exposure_limit` for the long side. |
+| `adg_w_per_exposure_short` | maximize | `adg_w` divided by `total_wallet_exposure_limit` for the short side. |
+| `mdg_per_exposure_long` | maximize | `mdg` divided by `total_wallet_exposure_limit` for the long side. |
+| `mdg_per_exposure_short` | maximize | `mdg` divided by `total_wallet_exposure_limit` for the short side. |
+
+---
+
+## Risk metrics
+
+These metrics capture drawdown, tail losses, and divergence between equity and account balance.
+
+| Metric | Optimize direction | Description |
+|--------|--------------------|-------------|
+| `drawdown_worst` | minimize | Maximum peak-to-trough drawdown over the full equity curve. |
+| `drawdown_worst_mean_1pct` | minimize | Mean of the worst 1% daily drawdowns. A smoother tail-risk estimate than the single worst event. |
+| `drawdown_worst_hsl` | minimize | Worst account-level drawdown observed while the Hard Stop Loss (HSL) subsystem is active. |
+| `drawdown_worst_ema_hsl` | minimize | Worst EMA-smoothed HSL drawdown, reported as `max(long, short)`. |
+| `drawdown_worst_mean_1pct_hsl` | minimize | Mean of the worst 1% HSL drawdown samples. |
+| `drawdown_worst_mean_1pct_ema_hsl` | minimize | Mean of the worst 1% EMA-smoothed HSL drawdown samples, reported as `max(long, short)`. |
+| `expected_shortfall_1pct` | minimize | Conditional Value at Risk (CVaR): the average of the worst 1% daily min-equity returns. |
+| `equity_balance_diff_neg_max` | minimize | Largest negative divergence between equity and account balance, expressed as `(equity - balance) / balance`. Tracks only drawdowns below balance. |
+| `equity_balance_diff_pos_max` | minimize | Largest positive divergence between equity and balance. Tracks only run-ups above balance. |
+| `equity_balance_diff_neg_mean` | minimize | Average negative equity-vs-balance divergence over the run. |
+| `equity_balance_diff_pos_mean` | minimize | Average positive equity-vs-balance divergence over the run. |
+
+<Note>
+  Equity-balance divergence metrics are computed minute-by-minute as `(equity - balance) / balance`.
+  Positive deviations feed only the `_pos_*` metrics; negative deviations feed only the `_neg_*`
+  metrics — there is no cross-contamination. This mirrors the implementation in
+  `passivbot-rust/src/analysis.rs`.
+</Note>
+
+---
+
+## Ratios & efficiency
+
+Risk-adjusted return ratios. All ratio metrics also have `_strategy_pnl_rebased` variants that operate on the collateral-agnostic equity curve.
+
+| Metric | Optimize direction | Description |
+|--------|--------------------|-------------|
+| `sharpe_ratio` | maximize | `adg` divided by the standard deviation of daily min-equity returns. |
+| `sharpe_ratio_w` | maximize | Recency-weighted Sharpe ratio. |
+| `sortino_ratio` | maximize | `adg` divided by downside deviation (only negative daily min-equity returns). |
+| `sortino_ratio_w` | maximize | Recency-weighted Sortino ratio. |
+| `calmar_ratio` | maximize | `adg` divided by the worst drawdown over the full equity curve. |
+| `calmar_ratio_w` | maximize | Recency-weighted Calmar ratio. |
+| `sterling_ratio` | maximize | `adg` divided by the average of the worst 1% drawdowns. |
+| `sterling_ratio_w` | maximize | Recency-weighted Sterling ratio. |
+| `omega_ratio` | maximize | Sum of positive daily returns divided by the absolute sum of negative daily returns. |
+| `omega_ratio_w` | maximize | Recency-weighted Omega ratio. |
+| `sharpe_ratio_strategy_pnl_rebased` | maximize | Sharpe ratio on the strategy-PnL rebased equity curve. |
+| `sharpe_ratio_strategy_pnl_rebased_w` | maximize | Recency-weighted version. |
+| `sortino_ratio_strategy_pnl_rebased` | maximize | Sortino ratio on the strategy-PnL rebased equity curve. |
+| `sortino_ratio_strategy_pnl_rebased_w` | maximize | Recency-weighted version. |
+| `calmar_ratio_strategy_pnl_rebased` | maximize | Calmar ratio on the strategy-PnL rebased equity curve. |
+| `calmar_ratio_strategy_pnl_rebased_w` | maximize | Recency-weighted version. |
+| `sterling_ratio_strategy_pnl_rebased` | maximize | Sterling ratio on the strategy-PnL rebased equity curve. |
+| `sterling_ratio_strategy_pnl_rebased_w` | maximize | Recency-weighted version. |
+| `omega_ratio_strategy_pnl_rebased` | maximize | Omega ratio on the strategy-PnL rebased equity curve. |
+| `omega_ratio_strategy_pnl_rebased_w` | maximize | Recency-weighted version. |
+
+---
+
+## Position & execution metrics
+
+These metrics measure trading activity, position duration, and recovery time from drawdowns.
+
+| Metric | Optimize direction | Description |
+|--------|--------------------|-------------|
+| `positions_held_per_day` | minimize | Average number of unique positions opened per calendar day. |
+| `position_held_hours_mean` | minimize | Mean holding time in hours across all closed positions. |
+| `position_held_hours_median` | minimize | Median holding time in hours. |
+| `position_held_hours_max` | minimize | Longest single position holding time in hours. |
+| `position_unchanged_hours_max` | minimize | Longest span without any fill on an existing open position. |
+| `volume_pct_per_day_avg` | maximize | Average daily traded notional as a percentage of account balance at fill time. |
+| `volume_pct_per_day_avg_w` | maximize | Recency-weighted version of `volume_pct_per_day_avg`. |
+| `peak_recovery_hours_equity_usd` | minimize | Longest time in hours that the USD equity curve remained below its prior all-time high before recovering. |
+| `peak_recovery_hours_equity_btc` | minimize | Same recovery duration measured on the BTC-denominated equity curve. |
+| `peak_recovery_hours_pnl` | minimize | Longest recovery time in hours for cumulative realized PnL (USD). Monitors realized drawdown recovery latency independently of mark-to-market swings. |
+| `peak_recovery_hours_hsl` | minimize | Longest time in hours below the all-time rebased HSL equity peak before recovery. Intended for optimizer risk limits. |
+| `high_exposure_hours_mean_long` | minimize | Mean duration in hours of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE. |
+| `high_exposure_hours_max_long` | minimize | Maximum duration in hours of such periods on the long side. |
+| `high_exposure_hours_mean_short` | minimize | Mean duration in hours of high-exposure periods on the short side. |
+| `high_exposure_hours_max_short` | minimize | Maximum duration in hours of high-exposure periods on the short side. |
+
+---
+
+## Hard Stop Loss (HSL) metrics
+
+HSL metrics track the behavior of the equity hard-stop mechanism — the circuit breaker that halts trading and optionally closes positions when equity draws down beyond configured thresholds.
+
+| Metric | Optimize direction | Description |
+|--------|--------------------|-------------|
+| `hard_stop_triggers` | — | Absolute count of RED-level HSL trigger events during the run. |
+| `hard_stop_restarts` | — | Absolute count of cooldown restarts after RED halts. |
+| `hard_stop_triggers_per_year` | minimize | `hard_stop_triggers / n_days × 365.25`. Annualized trigger rate. |
+| `hard_stop_restarts_per_year` | minimize | `hard_stop_restarts / n_days × 365.25`. Annualized restart rate. |
+| `hard_stop_duration_minutes_mean` | minimize | Mean duration in minutes of RED halt periods. |
+| `hard_stop_duration_minutes_max` | minimize | Maximum halt duration in minutes. |
+| `hard_stop_flatten_time_minutes_mean` | minimize | Mean time in minutes taken to fully close all positions after a RED trigger. |
+| `hard_stop_halt_to_restart_equity_loss_pct` | minimize | Percentage of equity lost between the halt trigger and the first restart. |
+| `hard_stop_panic_close_loss_max` | minimize | Worst single panic-close loss as a fraction of account balance. |
+| `hard_stop_panic_close_loss_sum` | minimize | Total panic-close loss summed across all triggers, as a fraction of starting balance. |
+| `hard_stop_post_restart_retrigger_pct` | minimize | Percentage of restarts that triggered another RED halt within a short window. |
+| `hard_stop_time_in_yellow_pct` | minimize | Fraction of backtest time spent in the YELLOW (caution) HSL state. |
+| `hard_stop_time_in_orange_pct` | minimize | Fraction of backtest time spent in the ORANGE (warning) HSL state. |
+| `hard_stop_time_in_red_pct` | minimize | Fraction of backtest time spent in the RED (halted) HSL state. |
+| `hard_stop_trigger_drawdown_mean` | minimize | Mean account drawdown at the moment of each RED trigger event. |
+| `backtest_completion_ratio` | maximize | Fraction of the requested backtest window that was actually simulated. Values below `1.0` indicate early termination (e.g., from a no-restart hard stop). The default schema enables a limit that penalizes `backtest_completion_ratio < 0.99`. |
+
+<Warning>
+  `hard_stop_triggers` and `hard_stop_restarts` are raw counts without time normalization. Use the
+  `_per_year` variants for optimizer scoring so that runs of different lengths are comparable.
+</Warning>
+
+---
+
+## Equity curve quality
+
+These metrics quantify how smooth and well-behaved the equity curve is, independent of its growth rate.
+
+| Metric | Optimize direction | Description |
+|--------|--------------------|-------------|
+| `equity_choppiness` | minimize | Normalized total variation of the equity curve. Lower values indicate a smoother, more monotone curve. |
+| `equity_choppiness_w` | minimize | Recency-weighted equity choppiness. |
+| `equity_jerkiness` | minimize | Normalized mean absolute second derivative of the equity curve. Measures how erratic the rate of change is. |
+| `equity_jerkiness_w` | minimize | Recency-weighted equity jerkiness. |
+| `exponential_fit_error` | minimize | Mean squared error from fitting a log-linear (exponential) curve to the equity history. Lower values indicate the equity grows more steadily at an approximately constant rate. |
+| `exponential_fit_error_w` | minimize | Recency-weighted exponential fit error. |
+
+---
+
+## Using metrics in scoring and limits
+
+### Scoring
+
+`optimize.scoring` defines the optimizer's multi-objective fitness function. Each entry specifies a metric and the optimization direction:
+
+```json
+"optimize": {
+  "scoring": [
+    {"metric": "adg_strategy_pnl_rebased", "goal": "max"},
+    {"metric": "adg_strategy_pnl_rebased_w", "goal": "max"},
+    {"metric": "mdg_strategy_pnl_rebased", "goal": "max"},
+    {"metric": "mdg_strategy_pnl_rebased_w", "goal": "max"},
+    {"metric": "peak_recovery_hours_hsl", "goal": "min"},
+    {"metric": "position_held_hours_max", "goal": "min"},
+    {"metric": "drawdown_worst_hsl", "goal": "min"},
+    {"metric": "drawdown_worst_mean_1pct_hsl", "goal": "min"}
+  ]
+}
+```
+
+The optimizer uses `mean` across exchanges as the scoring value for each metric. Candidates that improve on all objectives simultaneously dominate the Pareto front. The default 8-objective template shown above is what ships in `src/config/schema.py`.
+
+<Tip>
+  With 3 or fewer objectives the optimizer automatically selects NSGA-II; with 4 or more it uses
+  NSGA-III. The default 8-objective template therefore uses NSGA-III. Keep
+  `optimize.pymoo.algorithm: auto` to let Passivbot choose automatically.
+</Tip>
+
+### Limits
+
+`optimize.limits` defines hard constraints. Candidates that violate a limit receive a large fitness penalty, pushing them away from the Pareto front without disqualifying them entirely.
+
+Each limit object specifies:
+
+- `metric` — the metric name (e.g., `drawdown_worst_btc`, `adg`, `backtest_completion_ratio`).
+- `penalize_if` — `<`, `<=`, `>`, `>=`, `==`, `outside_range`, or `inside_range`.
+- `value` — numeric threshold for scalar operators.
+- `range` — `[low, high]` for range-based operators.
+- `stat` — optional override for which aggregate to compare: `min`, `max`, `mean`, or `std`. Default is `max` for `>` checks and `min` for `<` checks.
+
+```json
+"optimize": {
+  "limits": [
+    {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.3},
+    {"metric": "backtest_completion_ratio", "penalize_if": "<", "value": 0.99, "enabled": true},
+    {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]}
+  ]
+}
+```
+
+Limits can also be set per-run from the CLI without modifying your config file:
+
+```bash
+passivbot optimize \
+  --clear-limits \
+  --limit 'drawdown_worst <= 0.35' \
+  --limit 'backtest_completion_ratio >= 1.0' \
+  --limit 'adg > 0.0008 stat=mean' \
+  --limit 'peak_recovery_hours_hsl <= 500'
+```
+
+<Note>
+  CLI `--limit` expressions use keep-condition semantics: `'adg > 0.0008'` means "keep only
+  results where adg is greater than 0.0008", which internally translates to `penalize_if: "<"`.
+  Explicit JSON limit objects in `--limits` use direct `penalize_if` semantics.
+</Note>

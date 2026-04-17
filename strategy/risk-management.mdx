@@ -1,0 +1,207 @@
+---
+title: "Risk management: wallet exposure limits and enforcers"
+description: "Configure wallet exposure limits, auto-unstuck, WEL/TWEL enforcers, realized loss gates, and the equity hard stop loss circuit breaker."
+---
+
+Passivbot trades leveraged perpetual futures, where positions can grow many times larger than your account balance. The bot's risk philosophy centers on keeping that growth bounded: exposure limits cap how large any position can become, enforcers actively trim positions that grow beyond those limits, and the equity hard stop loss acts as a final supervisory circuit breaker. Understanding each layer helps you configure the bot safely.
+
+## Core concepts
+
+### Leverage vs. wallet exposure
+
+Passivbot ignores the exchange leverage setting in its internal risk calculations. It always measures risk against the **unleveraged wallet balance**. You must set exchange leverage high enough to support the positions the bot opens — a safe minimum is:
+
+```text
+exchange_leverage > total_wallet_exposure_limit_long + total_wallet_exposure_limit_short
+```
+
+**Wallet exposure (WE)** is the ratio of a position's notional value to the unleveraged balance:
+
+```text
+wallet_exposure = (position_size * average_entry_price) / unleveraged_wallet_balance
+```
+
+| WE value | Meaning |
+|---|---|
+| `0.0` | No position |
+| `1.0` | Position value equals 100% of balance |
+| `4.0` | Position value is 4× balance (requires 4× leverage) |
+
+**Example:** a $1,000 balance with 100 contracts at $35 gives `WE = (100 × 35) / 1,000 = 3.5`.
+
+### Wallet exposure limit (WEL)
+
+`wallet_exposure_limit` is the per-position ceiling. When a position's WE reaches this limit, the bot stops adding new entries to that position.
+
+### Total wallet exposure limit (TWEL)
+
+`total_wallet_exposure_limit` is the portfolio-level ceiling across all long (or short) positions. In a multi-coin setup the per-position limit is derived from it:
+
+```text
+wallet_exposure_limit = total_wallet_exposure_limit / n_positions
+```
+
+### Bankruptcy reference table
+
+Higher wallet exposure requires a smaller adverse price move to reach bankruptcy. In cross-margin mode, bankruptcy is a function of the entire account's health, not a single position.
+
+| Wallet exposure | Price drop to bankruptcy |
+|---|---|
+| 1.0 | Price must drop to 0 (practically impossible) |
+| 2.0 | 50% drop from average entry |
+| 3.0 | 33.3% drop from average entry |
+| 10.0 | 10% drop from average entry |
+
+## Getting stuck
+
+When price continues to drop after the WEL is reached, the bot becomes "stuck":
+
+- The position has a high average entry price.
+- Current price action is well below it.
+- The bot cannot add more re-entries to average down.
+- Funding fees slowly drain the account balance.
+
+Natural escapes are price reversion or balance growth from other profitable coins. The mechanisms below actively accelerate recovery.
+
+## Exposure enforcers
+
+Even with exposure limits in place, positions can grow beyond them — for example when a BTC-collateralized account loses BTC value, or when a user withdraws funds while positions are maxed out. Three parameters control how aggressively the bot trims oversized positions.
+
+### WEL enforcer (`risk_wel_enforcer_threshold`)
+
+The WEL enforcer monitors each position individually. When a position's exposure exceeds:
+
+```text
+effective_limit * risk_wel_enforcer_threshold
+```
+
+the bot issues a reduce-only order to bring it back under the effective limit.
+
+| Value | Behavior |
+|---|---|
+| `0.9` | Proactive trimming — keeps each position at 90% of its allowance |
+| `1.0` | Strict cap — trims immediately when the effective limit is exceeded |
+| `1.05` | Buffer zone — tolerates up to 5% over the effective limit before trimming |
+| `<= 0` | Disabled — no automatic trimming |
+
+### Excess allowance (`risk_we_excess_allowance_pct`)
+
+In practice, multiple positions rarely fill simultaneously. `risk_we_excess_allowance_pct` lets active positions borrow capacity from unfilled ones:
+
+```text
+effective_limit = wallet_exposure_limit * (1 + max(0, risk_we_excess_allowance_pct))
+```
+
+**Example:** with `wallet_exposure_limit = 0.20` and `risk_we_excess_allowance_pct = 0.10`, a position can grow to `WE = 0.22` before the enforcer trims it.
+
+<Note>
+**Comprehensive example:** $2,000 balance, `total_wallet_exposure_limit = 1.0`, `risk_we_excess_allowance_pct = 0.5`, `n_positions = 4`, `unstuck_threshold = 0.48`.
+
+Per-position dollar allowance: `($2,000 × 1.0 / 4) × (1 + 0.5) = $500 × 1.5 = $750`
+
+Per-position effective WE limit: `(1.0 / 4) × 1.5 = 0.375`
+
+The bot allows each position to reach WE `0.375`, but still gates new entries when total exposure would exceed `1.0`.
+
+Auto-unstuck activates at `0.375 × 0.48 = 0.18` (48% of effective full position).
+</Note>
+
+**Edge case with high excess allowance:** with `TWEL = 1.0`, `n_positions = 10`, and `excess_allowance = 0.5`, each position's effective limit is `0.15`. If 7 positions fill to `0.15`, total exposure reaches `1.05`, which exceeds the TWEL. The bot gates new orders on the 7th position to prevent breaching the portfolio limit.
+
+### TWEL enforcer (`risk_twel_enforcer_threshold`)
+
+The TWEL enforcer monitors the sum of all long (or short) exposures. When total exposure exceeds:
+
+```text
+total_wallet_exposure_limit * risk_twel_enforcer_threshold
+```
+
+the bot queues reduction orders, starting with the least underwater positions first.
+
+| Value | Behavior |
+|---|---|
+| `0.95` | Trim portfolio when it reaches 95% of the total limit |
+| `1.0` | Strict enforcement at the total limit |
+| `> 1.0` | Allow some overflow before forced reduction |
+
+## Realized-loss gate (`max_realized_loss_pct`)
+
+The realized-loss gate is a global guardrail on all loss-realizing close orders, including WEL/TWEL auto-reduce and auto-unstuck closes. Only panic closes are exempt.
+
+The gate is anchored to the peak realized balance reconstructed from fill history:
+
+```text
+balance_peak  = current_balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)
+balance_floor = balance_peak * (1 - max_realized_loss_pct)
+```
+
+For each candidate close order, if the projected balance after fill would fall below `balance_floor`, the order is blocked.
+
+| Value | Behavior |
+|---|---|
+| `<= 0.0` | Block all lossy closes |
+| `0.0–1.0` | Allow losses only down to the configured fraction below peak |
+| `>= 1.0` | Disabled (default) |
+
+**Example:** with a peak balance of $10,000 and `max_realized_loss_pct = 0.05`, lossy closes are blocked once the projected balance would fall below $9,500.
+
+<Warning>
+If the gate is too tight, it can block automatic reducers and unstuck orders entirely. If you need immediate forced reduction regardless of realized loss, use panic mode.
+</Warning>
+
+## Equity hard stop loss
+
+The equity hard stop loss (HSL) is a side-specific circuit breaker configured separately for long and short under `bot.long.hsl_*` and `bot.short.hsl_*`. It acts as a last-resort supervisory stop for when auto-unstuck is too slow and the realized-loss gate is still allowing clearly degraded operation.
+
+HSL tracks a reconstructed strategy PnL drawdown, not raw exchange equity, to avoid false triggers caused by collateral price movements.
+
+### Tiers
+
+Each `pside` has four tiers. Thresholds are derived from `hsl_red_threshold` using multipliers:
+
+```text
+yellow threshold = hsl_tier_ratios.yellow * hsl_red_threshold
+orange threshold = hsl_tier_ratios.orange * hsl_red_threshold
+red threshold    = hsl_red_threshold
+```
+
+<AccordionGroup>
+  <Accordion title="GREEN — normal trading">
+    The bot operates normally. No HSL restrictions apply.
+  </Accordion>
+  <Accordion title="YELLOW — warning tier">
+    A warning is raised. Trading continues without restriction, but the drawdown score is approaching the ORANGE threshold. Monitor closely.
+  </Accordion>
+  <Accordion title="ORANGE — reduced-risk mode">
+    Behavior is controlled by `hsl_orange_tier_mode`:
+
+    - `graceful_stop`: the bot stops opening new positions but continues managing existing ones.
+    - `tp_only_with_active_entry_cancellation`: entry orders are cancelled; only take-profit close management continues.
+  </Accordion>
+  <Accordion title="RED — hard stop">
+    1. That `pside` is forced into panic mode.
+    2. Positions are closed using `hsl_panic_close_order_type` (`market` or `limit`).
+    3. The bot waits until that `pside` is fully flat.
+    4. That `pside` halts. The opposite `pside` continues if its own HSL is not at RED.
+    5. Optional auto-restart after `hsl_cooldown_minutes_after_red` minutes. Set to `0` for no restart.
+  </Accordion>
+</AccordionGroup>
+
+### Signal mode
+
+`live.hsl_signal_mode` controls what PnL signal feeds each `pside` controller:
+
+| Mode | Behavior |
+|---|---|
+| `pside` | Long HSL uses long strategy PnL; short HSL uses short strategy PnL. One profitable side cannot hide a deteriorating one. |
+| `unified` | Both controllers use the same combined account-level signal. A profitable side can offset stress on the other in the trigger signal. |
+
+Use `pside` as the default. Use `unified` when long and short are designed to hedge or subsidize each other as a single combined book.
+
+## Diversification strategy
+
+Multi-coin operation is an important part of Passivbot's risk model. Running across many symbols distributes exposure and lets profitable positions subsidize stuck ones:
+
+- It is generally safer to have 3 out of 10 positions slightly stuck (each at `WE = 0.1`) than 1 position heavily stuck (at `WE = 1.0`).
+- "Dead cat bounces" happen at different times for different coins. Profits from recovering coins can fund auto-unstuck closes on lagging ones.
+- The auto-unstuck mechanism prioritizes the least underwater coin first, allowing quick recovery cycles.

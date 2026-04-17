@@ -1,0 +1,339 @@
+---
+title: "Bot parameters reference"
+description: "Full reference for bot.long and bot.short parameters: EMA spans, grid entry, trailing entry, grid close, trailing close, unstuck, and HSL settings."
+---
+
+`bot.long` and `bot.short` share the same parameter set—every parameter described here exists under both keys with independent values. Long settings control behavior when Passivbot holds long positions; short settings control behavior on the short side. Setting `n_positions` to `0` on either side disables it entirely. Default values in this page reflect the `bot.long` canonical defaults from `src/config/schema.py` unless otherwise noted.
+
+## General parameters
+
+### `ema_span_0` / `ema_span_1`
+
+EMA spans in minutes. Passivbot computes three EMAs: one at `ema_span_0`, one at `ema_span_1`, and a third at `(ema_span_0 * ema_span_1) ** 0.5`.
+
+The update formula for each EMA is:
+
+```
+alpha = 2 / (span + 1)
+next_EMA = prev_EMA * (1 - alpha) + new_value * alpha
+```
+
+The three EMAs form a band:
+- `ema_band_lower = min(emas)`
+- `ema_band_upper = max(emas)`
+
+These bands drive initial entry prices and auto-unstuck close prices.
+
+**Defaults:** `ema_span_0 = 770`, `ema_span_1 = 210` (long)
+
+### `n_positions`
+
+Maximum number of simultaneous positions to hold. Set to `0` to disable the side entirely.
+
+**Default:** `10`
+
+### `total_wallet_exposure_limit`
+
+Maximum fraction of the unleveraged wallet balance allocated to this side.
+
+```
+wallet_exposure_limit = total_wallet_exposure_limit / n_positions
+```
+
+Examples:
+- `0.75` → 75% of wallet balance used across all positions on this side
+- `1.6` → 160% of wallet balance (requires leverage ≥ 1.6 on the exchange)
+
+The per-position live denominator is always fixed. In backtests, `backtest.dynamic_wel_by_tradability` controls whether the denominator uses `n_positions` or the observed tradable-coin count.
+
+**Default:** `1.25` (long), `0.0` (short — short disabled by default)
+
+---
+
+## Grid entry parameters
+
+### `entry_grid_double_down_factor`
+
+The quantity of the next grid re-entry equals the current position size multiplied by this factor.
+
+```
+next_entry_qty = position_size * entry_grid_double_down_factor
+```
+
+Example: position size `1.4`, factor `0.9` → next entry qty `1.4 × 0.9 = 1.26`.
+
+This factor also applies to trailing entries.
+
+**Default:** `0.73`
+
+### `entry_grid_spacing_pct` / `entry_grid_spacing_we_weight`
+
+Controls the price step between successive grid re-entries.
+
+```
+# Long
+next_reentry_price = pos_price * (1 - entry_grid_spacing_pct * multiplier)
+# Short
+next_reentry_price = pos_price * (1 + entry_grid_spacing_pct * multiplier)
+
+multiplier = 1 + (wallet_exposure / wallet_exposure_limit) * entry_grid_spacing_we_weight
+           + log_component
+```
+
+Positive `entry_grid_spacing_we_weight` widens grid spacing as exposure approaches the wallet exposure limit; negative values tighten spacing when exposure is low.
+
+**Defaults:** `entry_grid_spacing_pct = 0.033`, `entry_grid_spacing_we_weight = 0.135`
+
+### `entry_grid_spacing_volatility_weight` / `entry_volatility_ema_span_hours`
+
+The `log_component` in the spacing multiplier above is derived from the EMA of the per-candle log range `ln(high / low)`, smoothed over `entry_volatility_ema_span_hours` hours.
+
+- `entry_grid_spacing_volatility_weight = 0` disables volatility-based spacing adjustment.
+- Positive values widen grid spacing in choppy markets.
+- The same volatility EMA also feeds `entry_trailing_threshold_volatility_weight` and `entry_trailing_retracement_volatility_weight`.
+
+**Defaults:** `entry_grid_spacing_volatility_weight = 2.4`, `entry_volatility_ema_span_hours = 1690`
+
+### `entry_grid_inflation_enabled`
+
+When `true`, grid-mode re-entries may inflate the current order near the effective wallet exposure cap if the next grid step would otherwise be tiny. When `false`, grid re-entries are only normal or cropped, strictly observing the effective WEL.
+
+<Warning>
+`false` is the canonical setting going forward. The current default remains `true` for backwards compatibility, but the inflated path is scheduled for deprecation. Config parsing logs a warning when this is `true`.
+</Warning>
+
+**Default:** `true`
+
+### `entry_initial_ema_dist`
+
+Offset from the EMA band used to place the initial entry:
+
+- **Long initial entry price:** `ema_band_lower * (1 - entry_initial_ema_dist)`
+- **Short initial entry price:** `ema_band_upper * (1 + entry_initial_ema_dist)`
+- **Long unstuck close price:** `ema_band_upper * (1 + unstuck_ema_dist)`
+- **Short unstuck close price:** `ema_band_lower * (1 - unstuck_ema_dist)`
+
+**Default:** `0.0097`
+
+### `entry_initial_qty_pct`
+
+Fraction of the per-position wallet exposure budget used for the initial entry:
+
+```
+initial_entry_cost = balance * wallet_exposure_limit * entry_initial_qty_pct
+```
+
+**Default:** `0.0276`
+
+---
+
+## Trailing entry parameters
+
+### `entry_trailing_double_down_factor`
+
+Same semantics as `entry_grid_double_down_factor` but applied to trailing re-entries. Higher values grow successive trailing entry sizes more aggressively.
+
+**Default:** `0.9`
+
+### `entry_trailing_threshold_pct` / `entry_trailing_retracement_pct`
+
+Two conditions must both be met before a trailing re-entry fires:
+
+1. **Threshold:** `highest_price_since_position_change > pos_price * (1 + entry_trailing_threshold_pct)` (long)
+2. **Retracement:** `lowest_price_since_highest > highest_price * (1 - entry_trailing_retracement_pct)` (long)
+
+If `entry_trailing_threshold_pct <= 0.0`, condition 1 is always satisfied.
+
+Trailing price tracking resets whenever the position changes (entry or partial close). Tracking uses 1m OHLCVs and updates on each new whole minute.
+
+**Defaults:** `entry_trailing_threshold_pct = 0.0029`, `entry_trailing_retracement_pct = 0.0276`
+
+### `entry_trailing_threshold_we_weight` / `entry_trailing_retracement_we_weight`
+
+Scale the trailing threshold and retracement bands based on current wallet exposure. Positive values widen the bands as exposure approaches the per-symbol limit, slowing additional entries. Set to `0.0` to disable exposure-based modulation.
+
+**Defaults:** `entry_trailing_threshold_we_weight = 1.31`, `entry_trailing_retracement_we_weight = 3.97`
+
+### `entry_trailing_threshold_volatility_weight` / `entry_trailing_retracement_volatility_weight`
+
+Scale the trailing threshold and retracement bands based on recent volatility, using the shared `entry_volatility_ema_span_hours` EMA. Positive values increase thresholds in choppy markets. Set to `0.0` to remove volatility modulation.
+
+**Defaults:** `entry_trailing_threshold_volatility_weight = 76`, `entry_trailing_retracement_volatility_weight = 87`
+
+---
+
+## Trailing grid ratio
+
+`entry_trailing_grid_ratio` (for entries) and `close_trailing_grid_ratio` (for closes) control what fraction of the allowed wallet exposure is allocated to trailing orders versus grid orders.
+
+The ratio operates on `we_ratio = wallet_exposure / effective_wallet_exposure_limit`.
+
+| Value | Effect |
+|---|---|
+| `0.0` | Grid orders only |
+| `1.0` or `-1.0` | Trailing orders only |
+| `> 0.0` | Trailing first, then grid |
+| `< 0.0` | Grid first, then trailing |
+
+**Examples:**
+
+- `trailing_grid_ratio = 0.3` — Trailing orders until the position is 30% full, then grid orders for the remaining 70%.
+- `trailing_grid_ratio = -0.9` — Grid orders until the position is `(1 - 0.9) = 10%` full, then trailing orders for the remaining 90%.
+- `trailing_grid_ratio = -0.12` — Grid orders until the position is `(1 - 0.12) = 88%` full, then trailing orders for the remaining 12%.
+- `trailing_grid_ratio = 0.1` — If `we_ratio < 0.1` → trailing order; else → grid order.
+- `trailing_grid_ratio = -0.1` — If `we_ratio < 0.9` → grid order; else → trailing order.
+
+**Defaults:** `entry_trailing_grid_ratio = -0.5`, `close_trailing_grid_ratio = -0.76` (long)
+
+---
+
+## Grid close parameters
+
+### `close_grid_markup_start` / `close_grid_markup_end` / `close_grid_qty_pct`
+
+Take-profit (TP) prices are linearly spaced between:
+
+```
+# Long
+tp_start = pos_price * (1 + close_grid_markup_start)
+tp_end   = pos_price * (1 + close_grid_markup_end)
+
+# Short
+tp_start = pos_price * (1 - close_grid_markup_start)
+tp_end   = pos_price * (1 - close_grid_markup_end)
+```
+
+The direction of the TP grid depends on the relationship between the two markups:
+
+- `markup_start > markup_end` → **backwards** TP (starting nearest to position price, descending for long)
+- `markup_start < markup_end` → **forwards** TP (starting farthest from position price, ascending for long)
+
+Each TP slice covers `full_pos_size * close_grid_qty_pct`. If the actual position is smaller than the full position size, fewer orders are created.
+
+**Examples (long, backward TP):** `pos_price = 100`, `markup_start = 0.01`, `markup_end = 0.005`, `qty_pct = 0.2`
+→ TP prices: `[101.0, 100.9, 100.8, 100.7, 100.6]`
+
+**Examples (long, forward TP):** `markup_start = 0.005`, `markup_end = 0.01`
+→ TP prices: `[100.5, 100.6, 100.7, 100.8, 100.9]`
+
+**Examples (short, forward TP):** `pos_price = 100`, `markup_start = 0.005`, `markup_end = 0.01`
+→ TP prices: `[99.5, 99.4, 99.3, 99.2, 99.1]`
+
+**Examples (short, backward TP):** `markup_start = 0.01`, `markup_end = 0.005`
+→ TP prices: `[99.0, 99.1, 99.2, 99.3, 99.4]`
+
+If the position exceeds the full position size, the excess is added to the TP order closest to `markup_start`.
+
+**Defaults:** `close_grid_markup_start = 0.00634`, `close_grid_markup_end = 0.0094`, `close_grid_qty_pct = 0.51` (long)
+
+---
+
+## Trailing close parameters
+
+### `close_trailing_grid_ratio`
+
+See [Trailing grid ratio](#trailing-grid-ratio) above.
+
+### `close_trailing_qty_pct`
+
+Close quantity per trailing order:
+
+```
+close_qty = full_pos_size * close_trailing_qty_pct
+```
+
+**Default:** `0.05`
+
+### `close_trailing_threshold_pct` / `close_trailing_retracement_pct`
+
+Same semantics as the trailing entry parameters but applied to trailing close orders. The bot waits for price to move favorably by `threshold_pct` from the position price and then retrace by `retracement_pct` before placing a close.
+
+**Defaults:** `close_trailing_threshold_pct = 0.001`, `close_trailing_retracement_pct = 0.00279` (long)
+
+---
+
+## Unstuck parameters
+
+Auto-unstuck chips away at a stuck position using profits from other active positions, avoiding a full stop-loss.
+
+### `unstuck_close_pct`
+
+Percentage of `full_pos_size * wallet_exposure_limit` to close per unstucking order.
+
+**Default:** `0.078`
+
+### `unstuck_ema_dist`
+
+Distance from the EMA band at which to place unstucking close orders:
+
+```
+long_unstuck_close_price  = ema_band_upper * (1 + unstuck_ema_dist)
+short_unstuck_close_price = ema_band_lower * (1 - unstuck_ema_dist)
+```
+
+**Default:** `-0.07` (places the long unstuck order slightly below the upper EMA band)
+
+### `unstuck_loss_allowance_pct`
+
+Maximum cumulative loss the bot will take while unstucking, relative to the peak balance:
+
+```
+loss_allowance = past_peak_balance * (1 - unstuck_loss_allowance_pct * total_wallet_exposure_limit)
+```
+
+Example: peak balance `$10,000`, `unstuck_loss_allowance_pct = 0.0102`, `total_wallet_exposure_limit = 1.25`:
+→ `loss_allowance = $10,000 * (1 - 0.0102 * 1.25) = $9,872.50`
+
+Once balance reaches the floor, no further unstucking losses are taken until other positions recover the balance.
+
+**Default:** `0.0102`
+
+### `unstuck_threshold`
+
+Fraction of `wallet_exposure_limit` at which a position is considered stuck:
+
+```
+if wallet_exposure / wallet_exposure_limit > unstuck_threshold:
+    unstucking enabled
+```
+
+Example: position exposure is `0.5 * wallet_exposure_limit`. With `unstuck_threshold = 0.408`, unstucking is active until the position size is trimmed back to `0.408 * wallet_exposure_limit`.
+
+**Default:** `0.408`
+
+---
+
+## Equity Hard Stop Loss (`bot.{long,short}.hsl_*`)
+
+HSL is a side-specific circuit breaker based on reconstructed strategy drawdown. It operates at three severity tiers. Parameters live directly under `bot.long.hsl_*` and `bot.short.hsl_*` independently.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `hsl_enabled` | `false` | Enable or disable HSL on this side. |
+| `hsl_red_threshold` | `0.2` | Drawdown score that triggers the RED tier. |
+| `hsl_ema_span_minutes` | `60` | EMA span for smoothing the drawdown signal. If smaller than `candle_interval_minutes`, smoothing is effectively disabled. |
+| `hsl_cooldown_minutes_after_red` | `0` | Minutes to wait before auto-restarting after a RED halt. `0` halts without auto-restart. |
+| `hsl_no_restart_drawdown_threshold` | `1` | Terminal no-restart threshold (persistent cross-restart drawdown). Clamped to `[hsl_red_threshold, 1.0]`. |
+| `hsl_tier_ratios.yellow` | `0.5` | Multiplier on `hsl_red_threshold` to derive the YELLOW tier threshold. Must satisfy `0 < yellow < orange < 1`. |
+| `hsl_tier_ratios.orange` | `0.75` | Multiplier on `hsl_red_threshold` to derive the ORANGE tier threshold. |
+| `hsl_orange_tier_mode` | `"tp_only_with_active_entry_cancellation"` | Behavior during ORANGE. Options: `graceful_stop`, `tp_only_with_active_entry_cancellation`. |
+| `hsl_panic_close_order_type` | `"limit"` | Order type used for RED panic exits. Options: `market`, `limit`. In backtests, `market` applies `backtest.market_order_slippage_pct` and charges taker fees. |
+
+### Tier behavior summary
+
+| Tier | Behavior |
+|---|---|
+| **YELLOW** | Warning only; trading continues normally on this side. |
+| **ORANGE** | Reduced-risk mode: either `graceful_stop` or `tp_only_with_active_entry_cancellation` depending on `hsl_orange_tier_mode`. |
+| **RED** | Panic close all positions on this side, confirm flat, halt this side, then optionally auto-restart after `hsl_cooldown_minutes_after_red`. |
+
+### HSL signal mode
+
+`live.hsl_signal_mode` controls which equity signal feeds the HSL controllers:
+
+- `"pside"` — each side uses its own realized/unrealized strategy PnL separately.
+- `"unified"` — both sides share the same account-level strategy signal (default).
+
+<Note>
+`long_hsl_no_restart_drawdown_threshold` and `short_hsl_no_restart_drawdown_threshold` are intentionally excluded from the default optimizer bounds. The optimizer disables terminal no-restart by default via `optimize.fixed_runtime_overrides` so candidates are constrained through `drawdown_worst_hsl` metrics instead of being prematurely truncated.
+</Note>

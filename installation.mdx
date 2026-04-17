@@ -1,0 +1,244 @@
+---
+title: "Install Passivbot"
+description: "Step-by-step guide to installing Passivbot on Linux, macOS, or Windows. Requires Python 3.12, Rust toolchain, and pip install profiles."
+---
+
+Passivbot requires **Python 3.12** — earlier versions are not supported. Its performance-critical order planning runs inside a compiled Rust extension (`passivbot_rust`), so a Rust toolchain must be present before installation. All three install profiles build this extension automatically as part of `pip install`.
+
+<Steps>
+  <Step title="Install prerequisites">
+    Before cloning the repository, make sure the following are available on your system.
+
+    **Python 3.12**
+
+    On Debian/Ubuntu:
+
+    ```bash
+    sudo apt install python3.12 python3.12-venv python3.12-dev
+    ```
+
+    On macOS, use [Homebrew](https://brew.sh/):
+
+    ```bash
+    brew install python@3.12
+    ```
+
+    On Windows, download the installer from [python.org](https://www.python.org/downloads/).
+
+    **Rust toolchain**
+
+    Install via [rustup](https://rustup.rs/), the official Rust installer:
+
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+    After installation, restart your terminal or run `source "$HOME/.cargo/env"` to make `rustc` and `cargo` available.
+
+    **C build tools**
+
+    On Debian/Ubuntu:
+
+    ```bash
+    sudo apt install build-essential
+    ```
+
+    On macOS, install Xcode command-line tools:
+
+    ```bash
+    xcode-select --install
+    ```
+  </Step>
+
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/enarjord/passivbot.git
+    cd passivbot
+    ```
+  </Step>
+
+  <Step title="Create and activate a virtual environment">
+    Create a Python 3.12 virtual environment inside the repository root.
+
+    <Tabs>
+      <Tab title="Linux / macOS">
+        ```bash
+        python3.12 -m venv venv
+        source venv/bin/activate
+        ```
+      </Tab>
+      <Tab title="Windows (Command Prompt)">
+        ```cmd
+        py -3.12 -m venv venv
+        venv\Scripts\activate
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        py -3.12 -m venv venv
+        .\venv\Scripts\Activate.ps1
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install Passivbot">
+    Choose the install profile that matches your use case. All profiles build the Rust extension and register the `passivbot` CLI command.
+
+    <CodeGroup>
+
+    ```bash live-only (VPS)
+    python3 -m pip install -U pip
+    python3 -m pip install -e .
+    ```
+
+    ```bash full (backtesting / optimization)
+    python3 -m pip install -U pip
+    python3 -m pip install -e ".[full]"
+    ```
+
+    ```bash dev (contributing / linting)
+    python3 -m pip install -U pip
+    python3 -m pip install -e ".[dev]"
+    ```
+
+    </CodeGroup>
+
+    The `full` profile adds the backtester, optimizer, OHLCV downloader, and research tools. The `dev` profile adds contributor tooling on top of `full`.
+  </Step>
+
+  <Step title="Build the Rust extension (optional manual build)">
+    `pip install` builds the Rust extension automatically. If you modify Rust source code or need to rebuild manually, run:
+
+    ```bash
+    source venv/bin/activate
+    cd passivbot-rust
+    maturin develop --release
+    cd ..
+    ```
+
+    Passivbot also detects Rust source changes on startup and attempts to recompile automatically.
+  </Step>
+
+  <Step title="Verify the installation">
+    ```bash
+    passivbot -h
+    pytest -q
+    ```
+
+    For `full` installs, also check:
+
+    ```bash
+    passivbot backtest -h
+    passivbot optimize -h
+    ```
+
+    If `pytest` reports a missing `passivbot_rust` module, make sure the virtual environment is active and that `maturin develop --release` completed without errors.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ModuleNotFoundError: passivbot_rust">
+    The Rust extension was not built or the wrong Python environment is active.
+
+    Activate the virtual environment and rebuild:
+
+    ```bash
+    source venv/bin/activate
+    maturin develop --release
+    ```
+  </Accordion>
+
+  <Accordion title="error: linker cc not found / cannot find crt1.o">
+    C build tools are missing. On Debian/Ubuntu:
+
+    ```bash
+    sudo apt install build-essential python3.12-dev
+    ```
+
+    On macOS, install Xcode command-line tools:
+
+    ```bash
+    xcode-select --install
+    ```
+  </Accordion>
+
+  <Accordion title="feature edition2024 is required (Rust build failure)">
+    Your local Rust toolchain is too old for the crates resolved during the build. Update to the current stable toolchain and retry:
+
+    ```bash
+    rustup update stable
+    python3 -m pip install -e ".[full]"
+    ```
+
+    If Rust was installed from system packages rather than `rustup`, switch to the `rustup`-managed toolchain instead.
+  </Accordion>
+
+  <Accordion title="passivbot optimize requires the full Passivbot install">
+    The `optimize` and `backtest` commands require the `full` install profile:
+
+    ```bash
+    python3 -m pip install -e ".[full]"
+    ```
+  </Accordion>
+
+  <Accordion title="passivbot runs the wrong command after reinstalling">
+    Your shell is resolving a `passivbot` binary from a different environment. Check which one is being used:
+
+    ```bash
+    command -v passivbot
+    python -c "import sys; print(sys.executable)"
+    ```
+
+    Both should point to your active virtual environment. If not, refresh the shell command lookup:
+
+    ```bash
+    hash -r   # bash
+    rehash    # zsh / tcsh
+    ```
+
+    Or reactivate the virtual environment:
+
+    ```bash
+    deactivate
+    source venv/bin/activate
+    hash -r
+    ```
+  </Accordion>
+
+  <Accordion title="maturin develop: could not find a virtualenv or conda environment">
+    Run `maturin develop` from inside the active virtual environment:
+
+    ```bash
+    source venv/bin/activate
+    which python   # should point to .../venv/bin/python
+    maturin develop --release
+    ```
+  </Accordion>
+
+  <Accordion title="TypeError: unsupported operand type(s) for |">
+    You are running an unsupported Python version. Recreate the virtual environment using Python 3.12:
+
+    ```bash
+    deactivate
+    python3.12 -m venv venv
+    source venv/bin/activate
+    python3 -m pip install -e .
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Keeping it up to date
+
+When pulling new commits, refresh both the Python install and the Rust extension if the Rust source changed:
+
+```bash
+source venv/bin/activate
+git pull
+python3 -m pip install -e .            # or .[full] / .[dev]
+maturin develop --release              # only when passivbot-rust changed
+```
+
+If you see linker errors after an OS update (for example, after a glibc upgrade), rebuild the extension with `maturin develop --release`.

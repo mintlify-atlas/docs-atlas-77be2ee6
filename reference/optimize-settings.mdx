@@ -1,0 +1,331 @@
+---
+title: "Optimizer settings reference"
+description: "Full reference for config.optimize settings: bounds formats, scoring objectives, limit constraints, genetic algorithm parameters, and Pareto config."
+---
+
+`config.optimize` configures Passivbot's multi-objective evolutionary optimizer. The optimizer evaluates thousands of candidate configs against historical data, maintains a Pareto front of non-dominated solutions, and enforces user-specified constraints via penalty terms. Defaults come from `src/config/schema.py`. The optimizer requires the full install profile: `pip install -e ".[full]"`.
+
+## Bounds
+
+Bounds define the search space for each parameter. Every key in `optimize.bounds` uses the prefix `long_` or `short_` followed by the parameter name as it appears in `bot.long` or `bot.short`.
+
+### Formats
+
+| Format | Behavior |
+|---|---|
+| `[low, high]` | Continuous optimization between `low` and `high`. |
+| `[low, high, step]` | Discrete optimization. Optimizer explores only values on the grid: `low`, `low + step`, `low + 2*step`, ..., up to `high`. |
+| `[low, high, 0]` or `[low, high, null]` | Treated as continuous (equivalent to `[low, high]`). |
+| Single value (e.g., `0.5`) | Fixed parameter — not optimized. Equivalent to listing the key in `fixed_params`. |
+
+### Step behavior
+
+When a step is defined, the genetic algorithm performs crossover and mutation in index space (the indices of valid grid values) to ensure all offspring land on the grid. Steps must be positive and must not exceed the range `(high - low)`; invalid steps are treated as continuous with a logged warning.
+
+**Use stepped bounds when:**
+- The parameter should be an integer (use step `1` for `n_positions`).
+- You want coarser search to speed up optimization.
+- The parameter only makes sense at known intervals.
+
+### Example configuration
+
+```json
+"optimize": {
+  "bounds": {
+    "long_n_positions": [1, 20, 1],
+    "long_total_wallet_exposure_limit": [0.1, 2.0, 0.1],
+    "long_entry_grid_spacing_pct": [0.005, 0.05, 0.005],
+    "long_ema_span_0": [100, 10000],
+    "long_ema_span_1": [200, 20000]
+  }
+}
+```
+
+In this example: `n_positions` explores integers 1–20; `total_wallet_exposure_limit` explores 0.1, 0.2, ..., 2.0; `entry_grid_spacing_pct` explores 0.005, 0.01, ..., 0.05; `ema_span_0` and `ema_span_1` are continuous.
+
+### HSL bounds
+
+HSL parameters use side-specific prefixes:
+
+```
+long_hsl_red_threshold
+long_hsl_ema_span_minutes
+long_hsl_cooldown_minutes_after_red
+short_hsl_red_threshold
+short_hsl_ema_span_minutes
+short_hsl_cooldown_minutes_after_red
+```
+
+`long_hsl_no_restart_drawdown_threshold` and `short_hsl_no_restart_drawdown_threshold` are intentionally excluded from the default optimizer bounds. Terminal no-restart is disabled during optimizer runs via `optimize.fixed_runtime_overrides` so candidates are constrained through `*_hsl` metrics instead of being prematurely truncated.
+
+---
+
+## Scoring objectives
+
+`optimize.scoring` lists the metrics the optimizer minimizes (or maximizes) to build the Pareto front. Each entry specifies a metric name and direction:
+
+```json
+"scoring": [
+  {"metric": "adg_strategy_pnl_rebased", "goal": "max"},
+  {"metric": "adg_strategy_pnl_rebased_w", "goal": "max"},
+  {"metric": "mdg_strategy_pnl_rebased", "goal": "max"},
+  {"metric": "mdg_strategy_pnl_rebased_w", "goal": "max"},
+  {"metric": "peak_recovery_hours_hsl", "goal": "min"},
+  {"metric": "position_held_hours_max", "goal": "min"},
+  {"metric": "drawdown_worst_hsl", "goal": "min"},
+  {"metric": "drawdown_worst_mean_1pct_hsl", "goal": "min"}
+]
+```
+
+With the default `pymoo` backend and 8 objectives, Passivbot automatically selects `nsga3`.
+
+### Available metric families
+
+Some representative available metrics (append `_usd` or `_btc` to select denomination):
+
+- **Returns:** `adg`, `adg_w`, `mdg`, `mdg_w`, `gain`, `adg_strategy_pnl_rebased`, `mdg_strategy_pnl_rebased`
+- **Risk:** `drawdown_worst`, `drawdown_worst_mean_1pct`, `drawdown_worst_hsl`, `drawdown_worst_mean_1pct_hsl`, `expected_shortfall_1pct`
+- **Ratios:** `sharpe_ratio`, `sortino_ratio`, `calmar_ratio`, `omega_ratio`, `sterling_ratio`, `loss_profit_ratio`
+- **Recovery:** `peak_recovery_hours_equity`, `peak_recovery_hours_pnl`, `peak_recovery_hours_hsl`
+- **Position:** `position_held_hours_max`, `position_held_hours_mean`, `positions_held_per_day`, `position_unchanged_hours_max`
+- **HSL events:** `hard_stop_triggers`, `hard_stop_restarts`, `hard_stop_time_in_red_pct`, `hard_stop_panic_close_loss_sum`, `hard_stop_halt_to_restart_equity_loss_pct`
+
+### Suffixes
+
+- `_w` — Recency-biased mean across 10 temporal subsets (whole period, last 1/2, last 1/3, ..., last 1/10).
+- `_usd` — USD-denominated value.
+- `_btc` — BTC-denominated value. Can be used to compare strategy performance against passive BTC exposure even when `backtest.btc_collateral_cap = 0`.
+
+---
+
+## Optimization limits
+
+`optimize.limits` penalizes candidates whose metric values fall outside acceptable ranges. Penalties are added to the fitness score to push violating configs far from the Pareto front without disqualifying them entirely.
+
+### Limit entry fields
+
+| Field | Required | Description |
+|---|---|---|
+| `metric` | Yes | Canonical metric name (e.g., `drawdown_worst_hsl`, `loss_profit_ratio`). |
+| `penalize_if` | Yes | Comparison operator: `<`, `<=`, `>`, `>=`, `==`, `outside_range`, `inside_range`. Aliases like `less_than` and `greater_than` are also accepted. |
+| `value` | For scalar operators | Numeric threshold for `<`/`<=`/`>`/`>=`/`==` modes. |
+| `range` | For range operators | Two-value list `[low, high]` for `outside_range`/`inside_range`. |
+| `stat` | No | Statistic to compare: `min`, `max`, `mean`, `std`. Default is `_max` for `>` checks, `_min` for `<` checks, `_mean` for range checks. |
+| `enabled` | No | Set `false` to disable a limit without removing it. Prevents config normalization from re-adding defaults. |
+
+### Example
+
+```json
+"limits": [
+  {"metric": "drawdown_worst_hsl", "penalize_if": ">", "value": 0.8},
+  {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.85]},
+  {"metric": "backtest_completion_ratio", "penalize_if": "<", "value": 0.99, "enabled": true},
+  {"metric": "position_held_hours_max", "penalize_if": ">", "value": 2160},
+  {"metric": "adg_strategy_pnl_rebased", "penalize_if": "<", "value": 0.0005, "stat": "mean"}
+]
+```
+
+To opt out of a default limit without deleting it:
+
+```json
+{"metric": "backtest_completion_ratio", "enabled": false}
+```
+
+### CLI overrides
+
+Replace the full limit list for one run:
+
+```bash
+passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
+```
+
+Append individual limits and combine flags:
+
+```bash
+passivbot optimize \
+  --clear-limits \
+  --limit 'drawdown_worst <= 0.35' \
+  --limit 'backtest_completion_ratio>=1.0' \
+  --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
+  --limit 'adg > 0.0008 stat=mean'
+```
+
+CLI semantics:
+- `--limits` replaces `config.optimize.limits` for that run.
+- `--limit` appends one entry (repeatable). Scalar operators use keep-condition semantics.
+- `--clear-limits` starts from an empty list before `--limits` / `--limit` entries are applied.
+
+---
+
+## Genetic algorithm
+
+These parameters control the underlying evolutionary search. They apply to both `deap` and `pymoo` backends (pymoo has additional fine-grained settings under `optimize.pymoo`).
+
+| Parameter | Default | Description |
+|---|---|---|
+| `population_size` | `null` | Population size. For `pymoo` + `nsga3`, `null` means auto (uses number of reference directions). For `pymoo` + `nsga2` or `deap`, set an explicit integer. |
+| `iters` | `500000` | Total number of backtest evaluations per optimize session. |
+| `n_cpus` | `6` | Number of CPU cores used in parallel. |
+| `offspring_multiplier` | `1` | Multiplier on `population_size` to determine offspring count per generation. Values `> 1.0` increase exploration by sampling more children. |
+| `crossover_probability` | `0.64` | Probability of performing crossover between two individuals (DEAP backend). |
+| `crossover_eta` | `20` | Crowding factor for simulated-binary crossover. Lower values let offspring move farther from parents; higher values keep them closer. |
+| `mutation_probability` | `0.34` | Probability of mutating an individual (DEAP backend). |
+| `mutation_eta` | `20` | Crowding factor for polynomial mutation. Smaller values produce heavier-tailed steps; larger values confine mutations near the current value. |
+| `mutation_indpb` | `0.0135` | Probability that each attribute mutates when mutation is triggered. Set to `0` to auto-scale to `1 / n_parameters`. |
+| `backend` | `"pymoo"` | Optimizer backend: `"pymoo"` (default) or `"deap"`. |
+
+---
+
+## Pymoo-specific settings
+
+Settings under `optimize.pymoo` apply only when `optimize.backend = "pymoo"`.
+
+### Algorithm selection
+
+```json
+"pymoo": {
+  "algorithm": "auto"
+}
+```
+
+| Value | Behavior |
+|---|---|
+| `"auto"` | Uses `nsga2` when `len(optimize.scoring) <= 3`, otherwise `nsga3`. |
+| `"nsga2"` | Force NSGA-II regardless of objective count. |
+| `"nsga3"` | Force NSGA-III regardless of objective count. |
+
+### Shared block
+
+```json
+"pymoo": {
+  "shared": {
+    "crossover_eta": 20,
+    "crossover_prob_var": 0.5,
+    "eliminate_duplicates": true,
+    "mutation_eta": 20,
+    "mutation_prob_var": "auto"
+  }
+}
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `crossover_eta` | `20` | SBX distribution index. Higher values keep offspring closer to parents. |
+| `crossover_prob_var` | `0.5` | Per-variable SBX crossover probability. Each parameter has this probability of participating in crossover. |
+| `mutation_eta` | `20` | Polynomial-mutation distribution index. Higher values make smaller, more local mutations. |
+| `mutation_prob_var` | `"auto"` | Per-variable polynomial-mutation probability. `"auto"` resolves to `1 / n_params`. |
+| `eliminate_duplicates` | `true` | Skip duplicate candidates before running a backtest on them. Recommended since each evaluation is expensive. |
+
+### NSGA-III reference directions
+
+```json
+"pymoo": {
+  "algorithms": {
+    "nsga3": {
+      "ref_dirs": {
+        "method": "das_dennis",
+        "n_partitions": "auto"
+      }
+    }
+  }
+}
+```
+
+`n_partitions` controls the density of the reference-direction grid used by NSGA-III. Higher values generate more reference directions, increasing diversity resolution at the cost of heavier generations.
+
+With the default 8-objective scoring set:
+- `n_partitions = 3` → 120 reference directions
+- `n_partitions = 4` → 330 reference directions (the `"auto"` default)
+- `n_partitions = 5` → 792 reference directions
+
+When `population_size = null` and `algorithm = nsga3`, Passivbot uses the reference direction count as the population size (330 for the default 8-objective setup).
+
+### Full pymoo config example
+
+```json
+{
+  "optimize": {
+    "backend": "pymoo",
+    "population_size": null,
+    "pymoo": {
+      "algorithm": "auto",
+      "shared": {
+        "crossover_eta": 20,
+        "crossover_prob_var": 0.5,
+        "mutation_eta": 20,
+        "mutation_prob_var": "auto",
+        "eliminate_duplicates": true
+      },
+      "algorithms": {
+        "nsga2": {},
+        "nsga3": {
+          "ref_dirs": {
+            "method": "das_dennis",
+            "n_partitions": "auto"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Output
+
+| Parameter | Default | Description |
+|---|---|---|
+| `pareto_max_size` | `1000` | Maximum number of Pareto-optimal configs kept on disk under `optimize_results/.../pareto/`. Members are pruned by crowding distance (least diverse removed first, per-objective extremes preserved), not by age. |
+| `compress_results_file` | `true` | Compress the `all_results.bin` output file to save disk space. |
+| `write_all_results` | `true` | Append every evaluated candidate to `all_results.bin`. Set `false` to reduce disk writes; only Pareto/state artifacts are stored. |
+| `round_to_n_significant_digits` | `3` | Quantization precision for hashing configs, deduplicating candidates, and writing optimizer artifacts. Lower values collapse near-identical candidates more aggressively. |
+
+---
+
+## Advanced
+
+### `fixed_params`
+
+List of `optimize.bounds` keys to freeze at their current config values for the whole run. This is the config-file equivalent of `--fine_tune_params` on the CLI.
+
+```json
+"fixed_params": ["long_n_positions", "short_n_positions"]
+```
+
+### `fixed_runtime_overrides`
+
+Runtime-only overrides applied during optimizer evaluations without mutating the stored config. Used for optimizer-specific safety knobs.
+
+The default config disables terminal no-restart during optimization so candidates are evaluated without being prematurely truncated:
+
+```json
+"fixed_runtime_overrides": {
+  "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+  "bot.short.hsl_no_restart_drawdown_threshold": 1.0
+}
+```
+
+Any dotted config path is supported as a key.
+
+### `enable_overrides`
+
+List of constraint overrides applied during optimization to enforce specific parameter relationships before each backtest evaluation. Options:
+
+| Value | Effect |
+|---|---|
+| `"lossless_close_trailing"` | Enforces `close_trailing_threshold_pct > close_trailing_retracement_pct` to prevent the retracement from triggering before reaching the minimum profit threshold. |
+| `"forward_tp_grid"` | Creates an ascending TP grid: enforces `close_grid_markup_start < close_grid_markup_end`. |
+| `"backward_tp_grid"` | Creates a descending TP grid: enforces `close_grid_markup_start > close_grid_markup_end`. |
+
+**Default:** `[]`
+
+### `max_pending_starting_evals_per_cpu`
+
+Bounds how many seed evaluations (from `--start` configs) may be in flight simultaneously per CPU. Effective cap: `n_cpus * max_pending_starting_evals_per_cpu`.
+
+All provided starting configs are still evaluated before the optimizer trims them to the backend's initial population. Lower this value first if RAM spikes during initial seed evaluation on large seed pools or in suite mode.
+
+```json
+"max_pending_starting_evals_per_cpu": 1
+```

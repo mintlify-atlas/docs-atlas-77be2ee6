@@ -1,97 +1,68 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Passivbot: Automated Crypto Futures Trading Bot"
+description: "Passivbot is an open-source trading bot for perpetual futures markets. Run on Bybit, Bitget, OKX, GateIO, Binance, Kucoin, and Hyperliquid."
 ---
 
-## Setting up
+Passivbot is an automated cryptocurrency trading bot written in Python and Rust, designed to trade perpetual futures markets with minimal user intervention. It places and manages grid and trailing limit orders, dynamically selects the most volatile coins via its Forager system, and includes a powerful backtester and multi-objective optimizer to help you find optimal configurations.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Passivbot on Linux, macOS, or Windows. Requires Python 3.12 and Rust.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get the bot running live in minutes with API keys and a default config.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Configuration Reference" icon="sliders" href="/reference/configuration">
+    Full reference for every config parameter — bot, live, backtest, and optimizer settings.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Complete reference for all `passivbot` commands: live, backtest, optimize, download, and tools.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## How Passivbot works
 
-Everything you need to create world-class documentation.
+Passivbot is a contrarian market maker. Rather than predicting price direction, it provides liquidity by placing limit orders above and below the current price. When prices move against a position, it averages down (for longs) or up (for shorts) using a configurable grid or trailing strategy.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Strategy overview" icon="chart-line" href="/strategy/overview">
+    Understand grid entries, trailing orders, and the Martingale-inspired re-entry logic.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Forager mode" icon="compass" href="/strategy/forager">
+    Dynamically select the most volatile coins for optimal entry opportunities.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Risk management" icon="shield" href="/strategy/risk-management">
+    Configure wallet exposure limits, enforcers, and the equity hard stop loss.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Auto-unstuck" icon="unlock" href="/strategy/unstuck">
+    How the bot recovers from stuck positions using controlled partial closes.
   </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## Backtest and optimize
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+Passivbot includes a high-speed backtester powered by Rust and a multi-objective evolutionary optimizer to find the best configurations for your trading style.
+
+<CardGroup cols={2}>
+  <Card title="Backtesting" icon="clock-rotate-left" href="/backtesting">
+    Replay historical 1-minute OHLCV data across multiple exchanges and scenarios.
+  </Card>
+  <Card title="Optimizing" icon="wand-magic-sparkles" href="/optimizing">
+    Run NSGA-II/III optimization to find Pareto-optimal configurations.
+  </Card>
+</CardGroup>
+
+## Deploy and monitor
+
+<CardGroup cols={2}>
+  <Card title="Docker deployment" icon="docker" href="/live/deployment">
+    Run Passivbot in a container with environment-variable-driven configuration.
+  </Card>
+  <Card title="Monitor dashboard" icon="gauge" href="/monitor">
+    Use the web dashboard, terminal TUI, or relay to observe live bot state.
+  </Card>
+</CardGroup>
+
+<Warning>
+  Passivbot trades with real funds on leveraged perpetual futures markets. Use it at your own risk. Always start with small position sizes, test thoroughly with backtesting, and understand the risk parameters before deploying with significant capital.
+</Warning>

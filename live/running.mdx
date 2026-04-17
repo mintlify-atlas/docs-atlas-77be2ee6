@@ -1,0 +1,179 @@
+---
+title: "Running Passivbot live"
+description: "Start the Passivbot live trading bot with a user account and config file. Covers CLI flags, logging configuration, and running multiple instances."
+---
+
+The `passivbot live` command starts the bot against a live exchange account. You can launch it with either a named account from `api-keys.json` or a path to a config file. Order planning runs via a shared Rust orchestrator, so the bot's behavior is fully reproducible from exchange state and config alone.
+
+## Basic usage
+
+Pass `-u` with the account name defined in `api-keys.json` to start with default settings:
+
+```bash
+passivbot live -u account_name
+```
+
+To use a custom configuration file, pass the path directly:
+
+```bash
+passivbot live path/to/config.json
+```
+
+The canonical starting point for a new config is the bundled example:
+
+```bash
+cp configs/examples/default_trailing_grid_long_npos10.json configs/my_config.json
+passivbot live configs/my_config.json
+```
+
+The schema defaults also live in `src/config/schema.py`. Omitting a config path loads those in-code defaults.
+
+## Logging
+
+Passivbot uses Python's logging module throughout the bot and supporting tools. By default, `passivbot live` writes a timestamped logfile under `logs/` and refreshes `logs/{user}.log` as a stable alias to the current run.
+
+### Verbosity flags
+
+| Flag | Effect |
+|---|---|
+| `--log-level 0` | Warnings only |
+| `--log-level 1` | Info (default) |
+| `--log-level 2` | Debug |
+| `--log-level 3` | Trace |
+| `--verbose` / `-v` | Force debug logging. Equivalent to `--log-level debug`. |
+
+`--debug-level` is an alias for `--log-level`. The CLI flag always overrides the value set in your config for that run.
+
+### Logging config block
+
+Persist a default log level and control file rotation by adding a `logging` section to your config:
+
+```json
+"logging": {
+  "level": 2,
+  "persist_to_file": true,
+  "dir": "logs",
+  "rotation": false,
+  "max_bytes_mb": 10,
+  "backup_count": 5
+}
+```
+
+To disable file persistence and use console-only output:
+
+```json
+"logging": {
+  "persist_to_file": false
+}
+```
+
+Key `logging` settings:
+
+| Key | Default | Description |
+|---|---|---|
+| `level` | `1` | Global verbosity: 0–3 |
+| `persist_to_file` | `true` | Write timestamped logfile to disk |
+| `dir` | `"logs"` | Directory for log files and the stable alias |
+| `rotation` | `false` | Enable rotating log files |
+| `max_bytes_mb` | `10` | Maximum log file size before rotation |
+| `backup_count` | `5` | Number of rotated backup files to keep |
+
+## Running multiple instances
+
+Running several Passivbot instances against the same exchange on one machine is supported. Each process shares the same on-disk OHLCV cache.
+
+The CandlestickManager uses short-lived, self-healing locks with automatic stale cleanup. If one process stalls, the others are not blocked — stale locks are removed on startup, and the bot logs whenever a lock acquisition times out. No manual deletion of lock files is required.
+
+To reduce lock contention when running many bots on the same machine, increase `live.candle_lock_timeout_seconds` in your config and consider setting `live.warmup_jitter_seconds` to spread out startup activity.
+
+## Forced modes
+
+You can override the bot's trading mode for all coins on a given side using `live.forced_mode_long` and `live.forced_mode_short` in your config, or by passing CLI flags. These are useful for pausing, stopping, or recovering positions without editing per-coin configuration.
+
+| Mode | Short code | Behavior |
+|---|---|---|
+| Normal | `n` | Bot manages positions as configured |
+| Manual | `m` | Bot ignores all positions on that side |
+| Graceful stop | `gs` | Manages existing positions but opens no new ones |
+| Take profit only | `t` | Only places closing orders; no new entries |
+| Panic | `p` | Closes all positions immediately |
+
+<Warning>
+  Panic mode (`p`) closes positions immediately using the order type configured in `bot.{long,short}.hsl_panic_close_order_type`. Use with care.
+</Warning>
+
+## Custom exchange endpoints
+
+Some setups require routing REST traffic through a proxy before it reaches the exchange. Passivbot supports this via `configs/custom_endpoints.json`.
+
+### Setting up a proxy
+
+<Steps>
+  <Step title="Create the config file">
+    Copy the example and edit it:
+
+    ```bash
+    cp custom_endpoints.json.example configs/custom_endpoints.json
+    ```
+
+    A minimal Binance USDT-margined futures override:
+
+    ```json
+    {
+      "defaults": {
+        "disable_ws": false,
+        "rest": {
+          "rewrite_domains": {},
+          "url_overrides": {},
+          "extra_headers": {}
+        }
+      },
+      "exchanges": {
+        "binanceusdm": {
+          "disable_ws": true,
+          "rest": {
+            "rewrite_domains": {
+              "https://fapi.binance.com": "https://proxy.example.exchange"
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    `rewrite_domains` swaps the original host while preserving the API path. `disable_ws` prevents WebSocket initialization when the proxy does not provide matching WebSocket endpoints.
+  </Step>
+  <Step title="Start the bot">
+    When `configs/custom_endpoints.json` exists, overrides are loaded automatically. You can also pass an explicit path or disable overrides entirely:
+
+    ```bash
+    # Use a specific overrides file
+    passivbot live --custom-endpoints configs/custom_endpoints.json configs/your_config.hjson
+
+    # Disable overrides even if the file exists
+    passivbot live --custom-endpoints none configs/your_config.hjson
+    ```
+
+    You can embed the path in your live config so it is always applied:
+
+    ```json
+    "live": {
+      "custom_endpoints_path": "configs/custom_endpoints.json"
+    }
+    ```
+  </Step>
+  <Step title="Verify at startup">
+    Passivbot logs every active override at launch. Look for lines like:
+
+    ```
+    INFO Custom endpoint active for binanceusdm.fapiPrivate: https://fapi.binance.com/fapi/v1 -> https://proxy.example.exchange/fapi/v1
+    INFO Custom endpoint override active for binanceusdm (disable_ws=True, source=...)
+    ```
+
+    If the proxy rejects the request, ccxt reports a 403 or 401 with the proxied URL, confirming routing is in effect.
+  </Step>
+</Steps>
+
+<Note>
+  The override file only affects REST endpoints. When `disable_ws` is `true`, WebSocket sessions are skipped and the bot falls back to REST polling for order and position updates. Trading continues normally — only the `watch_orders` push updates are suppressed.
+</Note>

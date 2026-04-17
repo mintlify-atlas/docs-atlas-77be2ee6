@@ -1,0 +1,125 @@
+---
+title: "Monitor live Passivbot instances"
+description: "Use the Passivbot monitor relay, web dashboard, and terminal TUI to observe live bot state, positions, events, and price ticks in real time."
+---
+
+Passivbot's monitor stack is split into two layers. The live bot publishes local monitor artifacts to disk under `monitor/<exchange>/<user>/`. A separate relay process auto-discovers those artifacts and exposes them over a read-only HTTP and WebSocket interface that local tools — the web dashboard, terminal TUI, and any custom consumers — can connect to without touching bot memory or raw files directly.
+
+## Monitor stack overview
+
+The publisher writes snapshots, events, and price tick history to disk on a configurable interval. The relay reads those files, tracks which bots are active or stale, and fans all of their feeds into a single multiplexed endpoint. One relay process can serve any number of bots from the same repository checkout.
+
+## Starting the relay
+
+Start the relay before or after any bot. It auto-detects publishers under the `monitor/` directory and keeps relaying as bots start, go quiet, stop, or restart.
+
+```bash
+passivbot tool monitor-relay --monitor-root monitor
+```
+
+The relay binds to `127.0.0.1:8765` by default. You can also invoke the underlying script directly:
+
+```bash
+python src/tools/monitor_relay.py --monitor-root monitor
+```
+
+<Note>
+  The relay is intended to be a single long-running process per repository checkout. Bot presence is sticky: bots transition from `active` to `stale` before they are pruned, so short quiet periods do not flicker the feed or dashboard.
+</Note>
+
+## Relay endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Returns discovered monitor roots, relay presence status (`active`, `stale`, `offline`), and relay health metadata. |
+| `GET /snapshot` | Returns the latest snapshot for one bot when `exchange` and `user` are provided. Without filters, returns a `snapshot_bundle` for all visible bots. |
+| `GET /dashboard` | Serves the static browser dashboard bootstrapped from the same relay contract. |
+| `GET /ws` | With `exchange` and `user`, streams one selected bot. Without filters, sends startup snapshots for all visible bots, replays recent messages, then streams live updates from all bots on one WebSocket connection. |
+
+<Info>
+  The relay is read-only. It does not mutate monitor artifacts. All snapshot, event, and history messages carry `exchange` and `user` fields so consumers can differentiate bots.
+</Info>
+
+## Web dashboard
+
+The `monitor-web` command starts the relay (if not already running) and opens the browser dashboard:
+
+```bash
+passivbot tool monitor-web
+```
+
+If you prefer to manage the relay yourself, start it separately and then open `http://127.0.0.1:8765/dashboard` in your browser.
+
+The dashboard:
+
+- Connects to the aggregate `/snapshot` and `/ws` relay feed for all visible bots
+- Shows a dense overview card for every bot discovered by the relay
+- Lets you click any bot card to focus it without restarting the dashboard
+- Keeps a focused-bot detail view with panels for summary, positions, trailing, forager, unstuck, recent events, recent ticks, and recent orders
+- Marks temporarily quiet bots as `stale` instead of dropping them immediately
+
+You can pass `exchange`, `user`, and `symbol` query parameters to set the initial focus. The dashboard still consumes the full multiplexed relay feed regardless of these parameters.
+
+```bash
+http://127.0.0.1:8765/dashboard?exchange=bitget&user=bitget_01&symbol=BTC/USDT:USDT
+```
+
+## Terminal TUI
+
+The repository also includes a minimal terminal reader that connects to the relay:
+
+```bash
+passivbot tool monitor-tui --relay-url http://127.0.0.1:8765
+```
+
+When multiple bots are visible on the relay, select one explicitly using `--exchange`, `--user`, and optionally `--focus-symbol`:
+
+```bash
+passivbot tool monitor-tui \
+  --relay-url http://127.0.0.1:8765 \
+  --exchange bitget \
+  --user bitget_01 \
+  --focus-symbol BTC/USDT:USDT
+```
+
+The TUI bootstraps its current-state panels from `/snapshot`, keeps recent events and price ticks live through `/ws`, and supports the following commands:
+
+| Command | Description |
+|---|---|
+| `focus` | Switch symbol focus within the current bot |
+| `pause` | Pause the live WebSocket feed |
+| `resume` | Resume the live WebSocket feed |
+| `dump` | Print current state to the terminal |
+| `clear` | Clear the terminal output |
+| `help` | Show available commands |
+| `quit` / `exit` | Exit the TUI |
+
+## Monitor dev wrapper
+
+For local monitor iteration, use the convenience wrapper that handles relay startup automatically:
+
+```bash
+passivbot tool monitor-dev --exchange bitget --user bitget_01
+```
+
+The wrapper reuses an existing relay if one is already healthy at the target `--relay-url`, or launches the relay automatically for local relay URLs. It selects the newest `logs/*.log` file by default unless `--log-file` is provided.
+
+<Tip>
+  Live bots write both a timestamped per-run logfile under `logs/` and a stable `logs/{user}.log` alias to the current run. Local monitor tooling can follow the stable per-user path or let `monitor-dev` pick the newest logfile automatically.
+</Tip>
+
+## Monitor configuration
+
+Configure the monitor publisher under `config.monitor`:
+
+| Key | Description |
+|---|---|
+| `enabled` | Master switch for monitor publication. Default `true`. |
+| `root_dir` | Base directory for monitor output. Per-bot data is written under `root_dir/{exchange}/{user}`. |
+| `snapshot_interval_seconds` | Best-effort minimum interval between `state.latest.json` writes. |
+| `event_rotation_mb` | Rotate `events/current.ndjson` after it exceeds this size in megabytes. |
+| `retain_days` | Age-based retention for rotated event, history, and checkpoint files. |
+| `compress_rotated_segments` | If `true`, gzip rotated event segments and checkpoints. |
+| `retain_price_ticks` | Enable or disable the current price tick history stream. |
+| `retain_candles` | Enable or disable the completed candle history stream. |
+| `retain_fills` | Enable or disable the normalized fill history stream. |

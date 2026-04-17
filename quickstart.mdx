@@ -1,80 +1,122 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Get started with Passivbot"
+description: "Configure API keys, choose a starting config, and run your first Passivbot live trading session in under 10 minutes with a step-by-step guide."
 ---
 
-## Get started in three steps
+Once Passivbot is installed, getting to a live session takes four steps: add your exchange API keys, pick a starting configuration, run the bot, and confirm it is working. This guide walks through each step using the default trailing-grid configuration that ships with the repository.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
+  <Step title="Add your API keys">
+    Passivbot reads exchange credentials from `api-keys.json` in the repository root. Copy the provided example file to create your own:
 
-### Step 1: Set up your local environment
+    ```bash
+    cp api-keys.json.example api-keys.json
+    ```
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    Open `api-keys.json` and fill in your credentials. Each entry uses a short account name as the key — you will pass this name to the `passivbot live` command. Here is an example showing the structure for a few exchanges:
 
-### Step 2: Deploy your changes
+    ```json
+    {
+        "bybit_01": {
+            "exchange": "bybit",
+            "key": "your_api_key",
+            "secret": "your_api_secret"
+        },
+        "okx_01": {
+            "exchange": "okx",
+            "key": "your_api_key",
+            "secret": "your_api_secret",
+            "passphrase": "your_passphrase"
+        },
+        "hyperliquid_01": {
+            "exchange": "hyperliquid",
+            "wallet_address": "0x_your_wallet_address",
+            "private_key": "0x_your_private_key",
+            "is_vault": false
+        }
+    }
+    ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    Exchanges that require a passphrase (Bitget, OKX, Kucoin) include a `"passphrase"` field. Hyperliquid uses wallet-based auth instead of API key/secret.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    <Warning>
+      Never commit `api-keys.json` to version control. The file is listed in `.gitignore` by default, but verify this before pushing any changes.
+    </Warning>
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Choose a starting configuration">
+    Passivbot ships with example configurations in `configs/examples/`. The recommended starting point is:
 
-### Step 3: Go live
+    ```
+    configs/examples/default_trailing_grid_long_npos10.json
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    This file mirrors the hardcoded defaults in `src/config/schema.py` exactly, so it is the most predictable starting point for new setups. Copy it to create your own working config:
+
+    ```bash
+    cp configs/examples/default_trailing_grid_long_npos10.json configs/my_config.json
+    ```
+
+    You can also run the bot without a config file at all — passing only `-u account_name` uses those same hardcoded defaults directly.
+  </Step>
+
+  <Step title="Run the bot">
+    Start the bot using the `passivbot live` command. You have two options:
+
+    **Default settings** — pass only your account name:
+
+    ```bash
+    passivbot live -u bybit_01
+    ```
+
+    **Custom config** — pass the path to your configuration file:
+
+    ```bash
+    passivbot live configs/my_config.json
+    ```
+
+    You can adjust log verbosity with `--debug-level` (alias `--log-level`):
+
+    - `0` — warnings only
+    - `1` — info (default)
+    - `2` — debug
+    - `3` — trace
+
+    ```bash
+    passivbot live -u bybit_01 --debug-level 1
+    ```
+  </Step>
+
+  <Step title="Verify it's running">
+    After startup, Passivbot logs its activity to the terminal. It also writes a timestamped log file under `logs/` and maintains a stable alias at `logs/{account_name}.log` that always points to the current run.
+
+    To follow the live log for an account named `bybit_01`:
+
+    ```bash
+    tail -f logs/bybit_01.log
+    ```
+
+    Look for lines confirming the exchange connection, loaded configuration, and initial order placement. If you see errors about missing `passivbot_rust`, make sure your virtual environment is active and run `maturin develop --release` to rebuild the extension.
+  </Step>
+</Steps>
+
+<Tip>
+  Start with a small `wallet_exposure_limit` in your config (for example `0.02` for 2% of wallet balance per symbol) while you validate that the bot is behaving as expected. You can increase it later once you are comfortable with the strategy.
+</Tip>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Live trading" icon="chart-line" href="/live/deployment">
+    Deploy Passivbot on a VPS or Docker container for 24/7 operation with process supervision.
+  </Card>
+  <Card title="Configuration reference" icon="sliders" href="/reference/configuration">
+    Explore every config parameter — grid spacing, trailing thresholds, exposure limits, and more.
+  </Card>
+  <Card title="Backtesting" icon="clock-rotate-left" href="/backtesting">
+    Validate your configuration against years of historical OHLCV data before going live.
+  </Card>
+  <Card title="Optimizing" icon="wand-magic-sparkles" href="/optimizing">
+    Use the NSGA-II/III evolutionary optimizer to find Pareto-optimal configurations automatically.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

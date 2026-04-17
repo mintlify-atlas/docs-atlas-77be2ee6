@@ -1,0 +1,300 @@
+---
+title: "Backtest settings reference"
+description: "Full reference for config.backtest settings: date range, exchanges, OHLCV sources, suite scenarios, fee overrides, and liquidation threshold."
+---
+
+`config.backtest` controls backtest behavior including the date range, exchanges, data sources, performance tuning, risk simulation, and suite scenarios. Many of these settings also affect optimizer runs since the optimizer runs backtests internally. Defaults come from `src/config/schema.py`.
+
+## Date and data
+
+### `start_date` / `end_date`
+
+Date range for the backtest. Set `end_date` to `"now"` to use today's date automatically.
+
+```json
+"start_date": "2021-01-01",
+"end_date": "now"
+```
+
+**Defaults:** `start_date = "2021-01-01"`, `end_date = "now"`
+
+### `starting_balance`
+
+Starting balance in USD at the beginning of the backtest.
+
+**Default:** `100000`
+
+### `exchanges`
+
+Exchanges from which to fetch 1m OHLCV data. Supported values: `binance`, `bybit`, `gateio`, `bitget`.
+
+```json
+"exchanges": ["binance", "bybit"]
+```
+
+<Note>
+**GateIO note:** If you already have `caches/ohlcv/gateio` data on disk, delete it before a fresh run so Passivbot rebuilds the cache with base-volume-normalized data.
+</Note>
+
+**Default:** `["binance", "bybit"]`
+
+### `coin_sources`
+
+Optional mapping of `coin → exchange` to override the automatic exchange selection when multiple exchanges are configured. Scenario-level `coin_sources` can add more overrides; conflicting assignments raise an error.
+
+```json
+"coin_sources": {
+  "BTC": "binance",
+  "ETH": "bybit"
+}
+```
+
+**Default:** `{}`
+
+### `market_settings_sources`
+
+Optional mapping of `coin → exchange` used specifically for exchange metadata such as `price_step`, `qty_step`, fees, and min-size rules. This is separate from `coin_sources`: you may source candles from one exchange while borrowing market settings from another.
+
+**Default:** `{}`
+
+### `ohlcv_source_dir`
+
+Optional path to a pre-populated OHLCV directory to use before hitting exchange archives.
+
+Expected directory structure:
+```
+<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz
+```
+
+or `.npy` format. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (for example, `ETH_USDC:USDC`).
+
+**Default:** `null`
+
+### `volume_normalization`
+
+When `true`, normalize volume data across exchanges to make combined datasets comparable.
+
+**Default:** `true`
+
+---
+
+## Performance
+
+### `candle_interval_minutes`
+
+Aggregates raw 1m OHLCVs into coarser candles before the backtest loop runs. `1` keeps native 1m behavior; values above `1` speed up backtests and optimizer runs at the cost of losing intra-interval fill ordering.
+
+```json
+"candle_interval_minutes": 5
+```
+
+**Default:** `1`
+
+### `gap_tolerance_ohlcvs_minutes`
+
+Maximum tolerated hole size in prepared OHLCV data before the dataset is considered broken for that coin and exchange. Larger values accept sparser historical data; smaller values fail sooner on archive gaps.
+
+**Default:** `120`
+
+### `compress_cache`
+
+When `true`, compress cached OHLCV data to save disk space. When `false`, keep uncompressed for faster loading.
+
+**Default:** `true`
+
+### `base_dir`
+
+Location to save backtest results.
+
+**Default:** `"backtests"`
+
+### `balance_sample_divider`
+
+Minutes per bucket when sampling balances and equity for `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values thin out the series to reduce file sizes. Example: `15` stores one point every 15 minutes.
+
+**Default:** `60`
+
+---
+
+## Risk simulation
+
+### `liquidation_threshold`
+
+Early-stop equity-floor guard. The backtest terminates once total equity falls to or below:
+
+```
+stopping_equity = starting_balance * liquidation_threshold
+```
+
+Example: `starting_balance = 1000`, `liquidation_threshold = 0.05` → backtest stops at equity `<= 50`.
+
+When triggered, `backtest_completion_ratio` falls below `1.0`. Must satisfy `0.0 <= liquidation_threshold < 1.0`.
+
+**Default:** `0.05`
+
+### `market_order_slippage_pct`
+
+Slippage applied when the backtester simulates market-order execution. Applies to HSL panic closes when `hsl_panic_close_order_type = "market"` and to normal orders promoted to market execution via `live.market_orders_allowed`.
+
+```
+sell fill price = close * (1 - slippage_pct)  # rounded down to price_step
+buy fill price  = close * (1 + slippage_pct)  # rounded up to price_step
+```
+
+Market fills also use taker fees (exchange-derived by default, or `taker_fee_override` when set).
+
+**Default:** `0.0005` (5 bps)
+
+### `maker_fee_override`
+
+Optional maker fee override in part-per-one. Example: `0.0002` for 0.02%. Leave `null` to use the exchange-derived maker fees.
+
+**Default:** `0.0004`
+
+### `taker_fee_override`
+
+Optional taker fee override in part-per-one. Example: `0.00055` for 0.055%. Leave `null` to use the exchange-derived taker fees.
+
+**Default:** `null`
+
+---
+
+## Exposure
+
+### `filter_by_min_effective_cost`
+
+When `true`, skip coins whose projected initial entry would fall below the exchange's effective minimum cost. The projection uses:
+
+```
+projected_cost = balance × wallet_exposure_limit × entry_initial_qty_pct
+```
+
+**Default:** `false`
+
+### `dynamic_wel_by_tradability`
+
+Controls the WEL denominator in backtests.
+
+- `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(n_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins observed with real candles at any timestep so far (non-shrinking).
+- `false`: Fixed denominator matching live behavior: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
+
+**Default:** `true`
+
+---
+
+## BTC collateral
+
+### `btc_collateral_cap`
+
+Target (and ceiling) share of account equity to hold in BTC collateral.
+
+- `0` — Account fully in USD (no BTC collateral).
+- `1.0` — Target fully-BTC collateral.
+- `> 1` — Allow leveraged BTC collateral, accepting negative USD balances.
+
+**Default:** `0.0`
+
+### `btc_collateral_ltv_cap`
+
+Optional loan-to-value ceiling (`USD debt / equity`) enforced when topping up BTC. Leave `null` to allow unlimited debt; set to a float (for example, `0.6`) to stop buying BTC once leverage exceeds that threshold.
+
+**Default:** `null`
+
+---
+
+## Suite scenarios
+
+Suite mode runs multiple scenario backtests per candidate, aggregates the results, and feeds the aggregated metrics into scoring and limits. Enable it with `backtest.suite_enabled = true` or via `--suite` on the CLI.
+
+### `suite_enabled`
+
+Master switch for suite runs. Can be toggled at runtime via `--suite [y/n]`.
+
+**Default:** `false`
+
+### `scenarios`
+
+List of scenario dicts. Each scenario can override a subset of backtest settings:
+
+| Key | Description |
+|---|---|
+| `label` | Directory name under `backtests/suite_runs/<timestamp>/`. Used as the scenario identifier. |
+| `start_date` / `end_date` | Override the global date window for this scenario. |
+| `coins` | Restrict which coins are included in this scenario. |
+| `ignored_coins` | Skip specific coins for this scenario. |
+| `exchanges` | Limit which exchanges can contribute data to this scenario. |
+| `coin_sources` | Scenario-specific overrides for `coin_sources`. |
+| `overrides` | Arbitrary config path overrides applied for this scenario. |
+
+Example using `overrides`:
+
+```json
+"scenarios": [
+  { "label": "base" },
+  {
+    "label": "high_exposure",
+    "overrides": {
+      "bot.long.total_wallet_exposure_limit": 2,
+      "bot.short.total_wallet_exposure_limit": 2
+    }
+  },
+  {
+    "label": "top_coins",
+    "coins": ["BTC", "ETH", "SOL", "BNB", "XRP"]
+  }
+]
+```
+
+### `aggregate`
+
+Dict of metric-specific aggregation modes applied when combining scenario results before scoring. Keys fall back to the `default` entry if unspecified.
+
+Available modes: `mean`, `median`, `min`, `max`, `std`.
+
+```json
+"backtest": {
+  "aggregate": {
+    "default": "mean",
+    "mdg_usd": "median",
+    "sharpe_ratio": "std",
+    "drawdown_worst_usd": "max"
+  }
+}
+```
+
+**Default:**
+```json
+{
+  "default": "mean",
+  "peak_recovery_hours_hsl": "max",
+  "position_held_hours_max": "max",
+  "drawdown_worst_hsl": "max",
+  "drawdown_worst_mean_1pct_hsl": "max"
+}
+```
+
+---
+
+## Visible metrics
+
+### `visible_metrics`
+
+Controls which metrics are printed to the terminal after a standalone backtest.
+
+- `null` — Show the metrics implied by `optimize.scoring` and `optimize.limits`.
+- `[]` — Show all metrics.
+- Explicit list — Add named metrics to the default view.
+
+This only affects CLI visibility; the full metric set is always computed and persisted.
+
+**Default:** `null`
+
+---
+
+## Schema version
+
+### `config_version`
+
+Top-level schema version string. Canonical v7.9 configs use `"v7.9.0"`. Older configs without this field are treated as legacy and migrated during load.
+
+**Default:** `"v7.9.0"`

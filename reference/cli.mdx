@@ -1,0 +1,382 @@
+---
+title: "Passivbot CLI reference: commands, flags, and tools"
+description: "Complete reference for all passivbot commands: live, backtest, optimize, download, and the full tool subcommand family with flags and examples."
+---
+
+The `passivbot` unified CLI is the canonical entry point for all bot operations. It routes to the correct Python module for each command and enforces install-profile checks where required. Legacy direct-script entrypoints such as `python3 src/main.py`, `python3 src/backtest.py`, and `python3 src/optimize.py` remain fully functional for backwards compatibility, but the `passivbot` CLI is preferred for all new usage.
+
+<CardGroup cols={2}>
+  <Card title="live" icon="circle-play">
+    Run the live trading bot against a configured exchange account.
+  </Card>
+  <Card title="backtest" icon="chart-line">
+    Replay historical OHLCV data against a config. Requires full install.
+  </Card>
+  <Card title="optimize" icon="sliders">
+    Run the multi-objective evolutionary optimizer. Requires full install.
+  </Card>
+  <Card title="download" icon="download">
+    Pre-warm the OHLCV cache without running a backtest. Requires full install.
+  </Card>
+</CardGroup>
+
+<Info>
+  Commands marked **requires full install** need backtesting and optimization
+  dependencies. Install them with:
+
+  ```bash
+  python3 -m pip install -e ".[full]"
+  ```
+</Info>
+
+---
+
+## passivbot live
+
+Starts the live trading bot. Loads your config, connects to the exchange, and manages orders continuously.
+
+```
+passivbot live [config.json] [options]
+```
+
+When no config path is supplied the bot starts from the in-code schema defaults defined in `src/config/schema.py`. The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly and is the recommended starting point.
+
+### Flags
+
+| Flag | Alias | Description |
+|------|-------|-------------|
+| `--log-level LEVEL` | `--debug-level` | Logging verbosity. Accepts `warning`, `info`, `debug`, `trace` or integers `0`–`3`. Default: `1` (info). |
+| `--verbose` | `-v` | Force debug logging. Equivalent to `--log-level debug`. |
+| `--custom-endpoints PATH` | | Path to a custom endpoints JSON file for this run. Use `none` to disable endpoint overrides even if a default file exists. |
+
+<Note>
+  The `-u` / `--user` flag seen in quickstart examples (`passivbot live -u account_name`) is a
+  shorthand for the config-level `live.user` key. You can also set it directly in your config JSON
+  or pass it as a config override on the command line.
+</Note>
+
+Logging persists to `logs/{user}.log` by default. Control this with `config.logging.persist_to_file`, `config.logging.dir`, and the rotation settings in `config.logging`. The CLI flag always overrides the config value for that run.
+
+### Examples
+
+<Tabs>
+  <Tab title="With a config file">
+    ```bash
+    passivbot live configs/live/my_account.json
+    ```
+  </Tab>
+  <Tab title="With a user override">
+    ```bash
+    passivbot live configs/live/my_account.json -u bybit_01
+    ```
+  </Tab>
+  <Tab title="With debug logging">
+    ```bash
+    passivbot live configs/live/my_account.json --log-level debug
+    ```
+  </Tab>
+  <Tab title="Schema defaults">
+    ```bash
+    passivbot live
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## passivbot backtest
+
+Replays historical 1-minute OHLCV candles against a configuration. Missing candles are fetched from the exchange and cached under `caches/ohlcv/` for reuse.
+
+```
+passivbot backtest [config.json] [options]
+```
+
+Requires the full install profile (`pip install -e ".[full]"`).
+
+Results are written to `backtests/{exchange}/{timestamp}/`. Suite runs write to `backtests/suite_runs/{timestamp}/{scenario_label}/` and add a top-level `suite_summary.json`.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-dp` | Disable per-coin equity plots. |
+| `--suite [y/n]` | Override `backtest.suite_enabled`. Omit the value to enable (`--suite` alone toggles on). |
+| `--scenarios LABELS` | Comma-separated scenario labels to run. Implies `--suite y`. Example: `--scenarios base,binance_only` |
+| `--suite-config PATH` | Merge an additional suite definition JSON onto the base config without modifying the main config file. |
+
+### Examples
+
+<Tabs>
+  <Tab title="Single run">
+    ```bash
+    passivbot backtest configs/examples/default_trailing_grid_long_npos10.json
+    ```
+  </Tab>
+  <Tab title="No plots">
+    ```bash
+    passivbot backtest configs/examples/default_trailing_grid_long_npos10.json -dp
+    ```
+  </Tab>
+  <Tab title="Suite mode">
+    ```bash
+    passivbot backtest configs/my_config.json --suite
+    ```
+  </Tab>
+  <Tab title="Specific scenarios">
+    ```bash
+    passivbot backtest configs/my_config.json --scenarios binance_only,bybit_only
+    ```
+  </Tab>
+  <Tab title="External suite config">
+    ```bash
+    passivbot backtest configs/my_config.json --suite-config configs/suites/exchange_compare.json
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## passivbot optimize
+
+Runs the multi-objective evolutionary optimizer. It evaluates thousands of configuration candidates through backtests and maintains a Pareto front of the best performers.
+
+```
+passivbot optimize [config.json] [options]
+```
+
+Requires the full install profile (`pip install -e ".[full]"`). Results are written to `optimize_results/YYYY-MM-DDTHH_MM_SS_{exchanges}_{n_days}days_{coin_label}_{hash}/`.
+
+### Flags
+
+| Flag | Alias | Description |
+|------|-------|-------------|
+| `--start PATH` | `-t` | Seed the initial population from existing config JSON files. Accepts a single file or a directory of JSON files. |
+| `--suite [y/n]` | | Enable or disable suite mode. Omit the value to enable. |
+| `--suite-config PATH` | | Optional config file providing `backtest.scenarios` overrides for the optimizer. |
+| `--fine_tune_params KEYS` | `-ft` | Comma-separated `optimize.bounds` keys to keep tunable. All other bounds are locked to their current config values. |
+| `--limits JSON` | | Replace `config.optimize.limits` for this run with a JSON/HJSON payload. |
+| `--limit SPEC` | `-l` | Append one keep-condition limit entry. Repeatable. Example: `'drawdown_worst <= 0.35'` |
+| `--clear-limits` | | Start from an empty limit list before any `--limits` or `--limit` entries are applied. |
+| `--iters N` | `-i` | Number of optimizer iterations (evaluations). Maps to `optimize.iters`. |
+| `--n-cpus N` | `-c` | Number of parallel evaluation workers. Maps to `optimize.n_cpus`. Default: `6`. |
+
+<Tip>
+  Run `passivbot optimize --help-all` to see every config override flag, including optimizer
+  backend settings and all `optimize.bounds` keys.
+</Tip>
+
+### Examples
+
+<Tabs>
+  <Tab title="Basic run">
+    ```bash
+    passivbot optimize configs/examples/default_trailing_grid_long_npos10.json
+    ```
+  </Tab>
+  <Tab title="With starting configs">
+    ```bash
+    passivbot optimize configs/examples/default_trailing_grid_long_npos10.json \
+      --start configs/starting_pool/
+    ```
+  </Tab>
+  <Tab title="Fine-tune specific params">
+    ```bash
+    passivbot optimize configs/examples/default_trailing_grid_long_npos10.json \
+      --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
+    ```
+  </Tab>
+  <Tab title="With limits">
+    ```bash
+    passivbot optimize \
+      --clear-limits \
+      --limit 'drawdown_worst <= 0.35' \
+      --limit 'backtest_completion_ratio>=1.0' \
+      --limit 'adg > 0.0008 stat=mean'
+    ```
+  </Tab>
+  <Tab title="Suite mode with CPUs">
+    ```bash
+    passivbot optimize configs/my_config.json --suite -c 8 -i 5000
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## passivbot download
+
+Pre-warms the OHLCV cache using the same coin/date/exchange selection logic as the backtester. Useful before long optimize or backtest runs to avoid stalls from in-process downloads.
+
+```
+passivbot download [config.json] [options]
+```
+
+Requires the full install profile (`pip install -e ".[full]"`).
+
+### Flags
+
+| Flag | Alias | Description |
+|------|-------|-------------|
+| `--start-date DATE` | `-sd` | Cache start date. Examples: `2025`, `2025-01`, `2025-01-15`. Maps to `backtest.start_date`. |
+| `--end-date DATE` | `-ed` | Cache end date. Use `now` for the latest available candles. Maps to `backtest.end_date`. |
+| `--exchanges CSV` | `-e` | Comma-separated exchange names, e.g. `binance,bybit`. Maps to `backtest.exchanges`. |
+
+### Examples
+
+<Tabs>
+  <Tab title="From config">
+    ```bash
+    passivbot download configs/examples/default_trailing_grid_long_npos10.json
+    ```
+  </Tab>
+  <Tab title="Custom date range">
+    ```bash
+    passivbot download --start-date 2025-01-01 --end-date 2025-06-01 --exchanges binance,bybit
+    ```
+  </Tab>
+  <Tab title="Up to now">
+    ```bash
+    passivbot download configs/my_config.json --end-date now
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## passivbot tool
+
+Runs one of the auxiliary tool scripts. Many tools require the full install profile.
+
+```
+passivbot tool <tool-name> [tool-options]
+passivbot tool --help
+```
+
+Run `passivbot tool` without arguments to list all available tools with one-line descriptions.
+
+### Available tools
+
+<AccordionGroup>
+  <Accordion title="Data & cache tools">
+
+| Tool | Install | Description |
+|------|---------|-------------|
+| `candle-doctor` | full | Audit `caches/ohlcv/` shards for corruption, stale index entries, and legacy-format issues. Add `--fix` for automatic repairs. |
+| `verify-hlcvs-data` | full | Validate cached OHLCV datasets for gaps and duplicates before long runs. |
+| `migrate-historical-data` | full | Convert legacy `historical_data/ohlcvs_<exchange>/` shards to the current `caches/ohlcv/` layout. |
+| `pad-historical-daily` | full | Ensure daily OHLCV shards are present for the downloader when new coins are added. |
+| `streamline-json` | base | Reformat and compact a config or result JSON file. |
+
+```bash
+passivbot tool candle-doctor --fix
+passivbot tool verify-hlcvs-data
+passivbot tool migrate-historical-data
+passivbot tool pad-historical-daily
+passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos10.json
+```
+
+  </Accordion>
+
+  <Accordion title="Pareto & optimizer analysis">
+
+| Tool | Install | Description |
+|------|---------|-------------|
+| `pareto` | full | Select a single candidate from a Pareto front using a named decision method (`ideal`, `knee`, `reference`, `utility`, `lexicographic`, `outranking`). Alias: `pareto-explorer`. |
+| `pareto-explorer` | full | Alias for `pareto`. |
+| `pareto-dash` | full | Launch a Plotly Dash UI for interactive Pareto analysis across one or more optimize runs. |
+| `pareto-transform` | full | Convert `all_results.bin` or Pareto JSON entries into CSV/JSON summaries for external analysis. |
+
+```bash
+passivbot tool pareto optimize_results/.../pareto
+passivbot tool pareto -m reference --target adg_strategy_pnl_rebased=0.001
+passivbot tool pareto-dash --data-root optimize_results
+passivbot tool pareto-transform optimize_results/.../all_results.bin --out summary.csv
+```
+
+  </Accordion>
+
+  <Accordion title="Backtest utilities">
+
+| Tool | Install | Description |
+|------|---------|-------------|
+| `iterative-backtester` | full | Launch an interactive order-by-order iterative backtester for manual config tuning. |
+| `iterative-history-plot` | full | Plot iterative history files produced by the iterative backtester. |
+
+```bash
+passivbot tool iterative-backtester --config configs/your_config.json --symbol BTC/USDT:USDT
+passivbot tool iterative-history-plot backtests/.../fills.csv
+```
+
+  </Accordion>
+
+  <Accordion title="Monitor tools">
+
+| Tool | Install | Description |
+|------|---------|-------------|
+| `monitor-relay` | full | Serve monitor snapshots and live event streams for connected clients. |
+| `monitor-dev` | full | Launch the relay if needed and attach the terminal monitor in one command. |
+| `monitor-web` | full | Launch the relay if needed and keep the web dashboard available. |
+| `monitor-tui` | full | Launch the terminal monitor reader (reads from a running relay). |
+
+```bash
+passivbot tool monitor-relay
+passivbot tool monitor-dev
+passivbot tool monitor-web
+passivbot tool monitor-tui
+```
+
+  </Accordion>
+
+  <Accordion title="Fill events tools">
+
+| Tool | Install | Description |
+|------|---------|-------------|
+| `fill-events-dash` | full | Launch a Dash UI for inspecting cached fill-event history, PnL, and symbol-level details. |
+| `fill-events-doctor` | full | Audit cached fill-event anomalies and optionally repair them with `--repair`. |
+
+```bash
+passivbot tool fill-events-dash --users bybit_01
+passivbot tool fill-events-doctor --exchange bybit --user bybit_01
+passivbot tool fill-events-doctor --exchange bybit --user bybit_01 --repair
+```
+
+  </Accordion>
+
+  <Accordion title="Exchange helpers">
+
+| Tool | Install | Description |
+|------|---------|-------------|
+| `fetch-balance` | base | Lightweight credential smoke test. Loads one user from `api-keys.json` and prints the raw exchange balance payload. |
+| `generate-mcap-list` | full | Generate a JSON approved-coin list filtered by market cap and optionally by exchange availability. |
+| `hyperliquid-balance-probe` | base | Read-only: fetch one Hyperliquid wallet balance and print a normalized summary. |
+| `hyperliquid-order-margin-probe` | base | Mutating: place one tiny post-only order, snapshot balance changes, then cancel it. Requires `--yes`. |
+| `hyperliquid-position-probe` | base | Mutating: open or flatten a tiny position and inspect live state transitions. Requires `--yes`. |
+
+```bash
+passivbot tool fetch-balance --user bybit_01
+passivbot tool generate-mcap-list -n 80 -m 200 -e binance,bybit -o configs/approved_coins_top80.json
+passivbot tool hyperliquid-balance-probe --user hyperliquid_01
+passivbot tool hyperliquid-order-margin-probe --user hyperliquid_01 --symbol BTC/USDC:USDC --yes
+passivbot tool hyperliquid-position-probe --user hyperliquid_01 --symbol BTC/USDC:USDC --yes
+```
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Getting help
+
+Every command and tool accepts a `-h` / `--help` flag that prints usage information and all available flags:
+
+```bash
+passivbot --help
+passivbot live --help
+passivbot backtest --help
+passivbot optimize --help
+passivbot optimize --help-all   # shows every config override flag
+passivbot download --help
+passivbot tool --help
+passivbot tool pareto --help
+```

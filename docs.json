@@ -1,122 +1,94 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Passivbot",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#242b2c",
+    "light": "#6a6a6d",
+    "dark": "#ebeaea"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/466523f4-8aef-4a18-8205-1eb5fc0c1069.png",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/enarjord/passivbot"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/enarjord/passivbot"
+    }
+  },
   "navigation": {
     "tabs": [
       {
         "tab": "Guides",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Live Trading",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "live/running",
+              "live/api-keys",
+              "live/exchanges",
+              "live/deployment"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Strategy & Features",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "strategy/overview",
+              "strategy/forager",
+              "strategy/risk-management",
+              "strategy/unstuck"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Backtesting & Optimization",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "backtesting",
+              "optimizing",
+              "tools"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "monitor",
+              "troubleshooting"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Configuration",
             "pages": [
-              "api-reference/introduction"
+              "reference/configuration",
+              "reference/bot-parameters",
+              "reference/live-settings",
+              "reference/backtest-settings",
+              "reference/optimize-settings"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "CLI",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "reference/cli",
+              "reference/metrics"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

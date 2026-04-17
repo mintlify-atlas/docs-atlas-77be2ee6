@@ -1,0 +1,171 @@
+---
+title: "Configure API keys for Passivbot"
+description: "Add exchange API keys to api-keys.json to authenticate Passivbot. Covers key format for each supported exchange including Hyperliquid vaults."
+---
+
+Passivbot reads all exchange credentials from a single file named `api-keys.json` in the project root. Each entry is a named account object that maps a short identifier (the "user") to a set of exchange credentials. The `live.user` field in your config tells the bot which entry to use at runtime.
+
+## Create the file
+
+Copy the bundled template to get started:
+
+```bash
+cp api-keys.json.example api-keys.json
+```
+
+Then replace the placeholder values with your real credentials. The file can hold entries for multiple exchanges and multiple accounts on the same exchange.
+
+## File structure
+
+```json
+{
+  "bybit_01": {
+    "exchange": "bybit",
+    "key": "YOUR_API_KEY",
+    "secret": "YOUR_API_SECRET"
+  },
+  "bitget_main": {
+    "exchange": "bitget",
+    "key": "YOUR_API_KEY",
+    "secret": "YOUR_API_SECRET",
+    "passphrase": "YOUR_PASSPHRASE"
+  },
+  "hyperliquid_01": {
+    "exchange": "hyperliquid",
+    "wallet_address": "YOUR_USDC_PUBLIC_WALLET_ADDRESS",
+    "private_key": "API_PRIVATE_KEY",
+    "is_vault": false
+  }
+}
+```
+
+The top-level key (e.g. `bybit_01`) is the account name. Pass it with `-u` when starting the bot, or set `live.user` in your config file.
+
+## Per-exchange key format
+
+<Tabs>
+  <Tab title="Bybit">
+    ```json
+    "bybit_01": {
+      "exchange": "bybit",
+      "key": "YOUR_API_KEY",
+      "secret": "YOUR_API_SECRET"
+    }
+    ```
+
+    Generate keys in the Bybit account portal under **API Management**. Enable read and trade permissions for USDT perpetual contracts. A passphrase is not required.
+  </Tab>
+  <Tab title="Bitget">
+    ```json
+    "bitget_01": {
+      "exchange": "bitget",
+      "key": "YOUR_API_KEY",
+      "secret": "YOUR_API_SECRET",
+      "passphrase": "YOUR_PASSPHRASE"
+    }
+    ```
+
+    Bitget requires a passphrase in addition to the key and secret. Set this when creating the API key in the Bitget portal.
+  </Tab>
+  <Tab title="OKX">
+    ```json
+    "okx_01": {
+      "exchange": "okx",
+      "key": "YOUR_API_KEY",
+      "secret": "YOUR_API_SECRET",
+      "passphrase": "YOUR_PASSPHRASE"
+    }
+    ```
+
+    OKX also requires a passphrase. Enable read and trade permissions for futures on the API creation page.
+  </Tab>
+  <Tab title="GateIO">
+    ```json
+    "gateio_01": {
+      "exchange": "gateio",
+      "key": "YOUR_API_KEY",
+      "secret": "YOUR_API_SECRET"
+    }
+    ```
+
+    No passphrase required. Grant futures trading permissions when creating the key.
+  </Tab>
+  <Tab title="Binance">
+    ```json
+    "binance_01": {
+      "exchange": "binance",
+      "key": "YOUR_API_KEY",
+      "secret": "YOUR_API_SECRET"
+    }
+    ```
+
+    No passphrase required. Enable futures trading permissions. See the [Binance note](/live/exchanges#binance) on the referral requirement for commission sharing.
+  </Tab>
+  <Tab title="Kucoin">
+    ```json
+    "kucoin_01": {
+      "exchange": "kucoin",
+      "key": "YOUR_API_KEY",
+      "secret": "YOUR_API_SECRET",
+      "passphrase": "YOUR_PASSPHRASE"
+    }
+    ```
+
+    Kucoin requires a passphrase set during API key creation.
+  </Tab>
+  <Tab title="Hyperliquid">
+    Hyperliquid uses a wallet address and an API wallet private key rather than traditional key/secret pairs.
+
+    **Standard account:**
+
+    ```json
+    "hyperliquid_01": {
+      "exchange": "hyperliquid",
+      "wallet_address": "YOUR_USDC_PUBLIC_WALLET_ADDRESS",
+      "private_key": "API_PRIVATE_KEY",
+      "is_vault": false
+    }
+    ```
+
+    **Vault (CopyTrading-like):**
+
+    ```json
+    "hyperliquid_01": {
+      "exchange": "hyperliquid",
+      "wallet_address": "YOUR_VAULT_PUBLIC_ADDRESS",
+      "private_key": "API_PRIVATE_KEY",
+      "is_vault": true
+    }
+    ```
+
+    - `wallet_address` — your USDC deposit address (standard account) or vault public address (vault mode).
+    - `private_key` — the private key of the **API wallet** (agent wallet) you created in the Hyperliquid API section, not your main wallet key.
+    - `is_vault` — set to `true` when trading from a vault; `false` for a regular account.
+
+    See [Hyperliquid setup](/live/exchanges#hyperliquid) for full account and vault creation steps.
+  </Tab>
+</Tabs>
+
+## Referencing the account in your config
+
+Set `live.user` in your config file to select which `api-keys.json` entry the bot uses:
+
+```json
+"live": {
+  "user": "bybit_01"
+}
+```
+
+Alternatively, pass `-u` on the command line, which takes precedence over the config value:
+
+```bash
+passivbot live -u bybit_01
+```
+
+## Security
+
+<Note>
+  Never commit `api-keys.json` to version control. Add it to `.gitignore` immediately after creating it.
+
+  When creating API keys on each exchange, grant only the minimum permissions needed: **read** (account info, positions, orders) and **trade** (place and cancel orders on futures). Do not enable withdrawal permissions.
+</Note>

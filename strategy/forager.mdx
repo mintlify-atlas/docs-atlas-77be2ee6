@@ -1,0 +1,135 @@
+---
+title: "Forager: dynamic symbol selection for live trading"
+description: "Forager mode dynamically selects the most volatile coins for trading based on volume, volatility, and EMA readiness scores to fill available entry slots."
+---
+
+Rather than trading a fixed set of coins, Forager mode continuously answers the question: which symbols should occupy the available entry slots right now? It prunes low-volume candidates, ranks the rest by a weighted combination of volume, volatility, and EMA readiness, then fills available shortlist slots from that ranking. This lets the bot concentrate exposure on the coins most likely to produce entries soon, while keeping liquid and active markets prioritized.
+
+## Selection flow
+
+<Steps>
+  <Step title="Build candidates">
+    Collect all approved symbols that meet the minimum coin age requirement and pass the effective minimum cost check.
+  </Step>
+  <Step title="Disable ineligible candidates">
+    Disable any candidates that fail trading constraints such as slot availability or forced-mode overrides.
+  </Step>
+  <Step title="Prune by volume">
+    Drop the bottom `forager_volume_drop_pct` fraction of candidates by relative volume. This coarse prune removes illiquid tails before scoring. Set to `0` to skip this stage entirely.
+  </Step>
+  <Step title="Normalize features">
+    Normalize the remaining candidates' volume, volatility, and EMA readiness values so they are comparable across symbols.
+  </Step>
+  <Step title="Score and rank">
+    Compute a weighted score for each candidate using `forager_score_weights`. Positive weights are normalized to unit sum before use.
+  </Step>
+  <Step title="Fill slots">
+    Return the highest-scoring candidates needed to fill the available shortlist slots. The canonical shortlist logic runs in Rust and is shared between live selection and backtesting.
+  </Step>
+</Steps>
+
+## Feature definitions
+
+<AccordionGroup>
+  <Accordion title="Volume">
+    Controlled by `forager_volume_ema_span`, which sets the span (in minutes) of the exponential moving average of 1-minute quote volume.
+
+    - **Higher is better** for ranking.
+    - Volume is required for the prune step even when the volume score weight is zero, as long as `forager_volume_drop_pct > 0`.
+  </Accordion>
+
+  <Accordion title="Volatility">
+    Controlled by `forager_volatility_ema_span`, which sets the span (in minutes) of the EMA of the per-candle log range:
+
+    ```text
+    log_range = ln(high / low)
+    ```
+
+    - **Higher is better** for ranking.
+    - Volatility is a ranking input, not an entry trigger. A high-volatility coin is not guaranteed to produce an entry; it only earns a higher slot priority.
+  </Accordion>
+
+  <Accordion title="EMA readiness">
+    EMA readiness measures how close a symbol's current price is to its actual initial-entry threshold — that is, the EMA band offset by `entry_initial_ema_dist` — not just the raw EMA band.
+
+    **For long:**
+
+    ```text
+    readiness = bid / (ema_lower * (1 - entry_initial_ema_dist)) - 1
+    ```
+
+    **For short:**
+
+    ```text
+    readiness = 1 - ask / (ema_upper * (1 + entry_initial_ema_dist))
+    ```
+
+    - **Lower is better** for ranking.
+    - A negative value means the symbol has already crossed the initial-entry threshold.
+    - A value near zero means the symbol is close to triggering.
+    - A large positive value means the symbol is far from entry.
+  </Accordion>
+</AccordionGroup>
+
+## `forager_score_weights`
+
+`forager_score_weights` is a required dict with three keys. All values must be finite and non-negative.
+
+```json
+{
+  "volume": 0.0,
+  "ema_readiness": 0.0,
+  "volatility": 1.0
+}
+```
+
+Rules:
+- Positive weights are relative; only their proportions matter.
+- Positive weights are normalized to unit sum before scoring.
+- If all three weights are `0.0`, Passivbot normalizes to EMA-readiness-only ranking.
+
+**Common presets:**
+
+| Preset | `volume` | `ema_readiness` | `volatility` | Effect |
+|---|---|---|---|---|
+| Volatility only (default) | `0.0` | `0.0` | `1.0` | Favor most active, moving symbols |
+| Liquidity only | `1.0` | `0.0` | `0.0` | Maximize liquidity after prune |
+| Entry readiness only | `0.0` | `1.0` | `0.0` | Favor symbols nearest to a real entry |
+| Balanced | `0.2` | `0.6` | `0.2` | Bias toward actual setups with liquid, active preference |
+| EMA-readiness fallback | `0.0` | `0.0` | `0.0` | Same as entry-readiness-only |
+
+## Configuration parameters
+
+| Parameter | Description |
+|---|---|
+| `forager_volume_drop_pct` | Fraction of candidates to drop by relative volume before ranking. `0` skips the prune. |
+| `forager_volume_ema_span` | Minutes of EMA history used for the quote-volume ranking signal |
+| `forager_volatility_ema_span` | Minutes of EMA history used for the log-range volatility signal |
+| `forager_score_weights` | Weighted ranking dict with keys `volume`, `ema_readiness`, and `volatility` |
+
+<Note>
+`forager_volume_ema_span` and `forager_volatility_ema_span` control forager ranking inputs only. They are separate from `entry_volatility_ema_span_hours`, which adjusts grid and trailing entry spacing.
+</Note>
+
+The three sub-weights are also available as individual `optimize.bounds` keys, allowing the optimizer to tune the ranking mix:
+
+```json
+"bounds": {
+  "long_forager_score_weights_volume": [0.0, 1.0],
+  "long_forager_score_weights_ema_readiness": [0.0, 1.0],
+  "long_forager_score_weights_volatility": [0.0, 1.0]
+}
+```
+
+## Practical tuning notes
+
+- Start with `volatility: 1.0` if you want the shortlist to favor active, moving symbols.
+- Add `ema_readiness` weight when you want empty slots to prefer symbols closer to producing a real initial entry.
+- Include some volume pruning (`forager_volume_drop_pct > 0`) or a positive volume weight if your approved coin universe contains many illiquid tails.
+- If rankings look noisy or unstable, widen the forager EMA spans before adjusting entry parameters.
+
+## Failure policy
+
+<Warning>
+Forager inputs are trading-critical. Missing or non-finite forager data raises an error rather than falling back to a neutral default. Neutral defaults such as `0.0` or `inf` are not acceptable substitutes for required shortlist inputs. If fetch-budget exhaustion prevents building required shortlist inputs, Passivbot raises rather than silently substituting.
+</Warning>

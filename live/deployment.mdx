@@ -1,0 +1,153 @@
+---
+title: "Deploy Passivbot with Docker"
+description: "Run Passivbot in a Docker container using Dockerfile_live. Configure via environment variables, mount API keys, and set up persistent logs."
+---
+
+Passivbot ships a canonical container definition in `Dockerfile_live` with a thin entrypoint wrapper at `container/entrypoint.sh`. The container is designed to be fully configured via environment variables — credentials, config, log directories, and deployment overrides all flow in through `docker run -e` flags or a Compose file. This makes it suitable for Docker, Docker Compose, and hosted platforms such as Railway.
+
+## Build the image
+
+Run this from the repository root:
+
+```bash
+docker build -f Dockerfile_live -t passivbot-live:latest .
+```
+
+The image includes the compiled Rust extension and starts the entrypoint wrapper by default. It uses the installed `passivbot` CLI internally — not `python src/main.py`.
+
+## Required environment variables
+
+| Variable | Description |
+|---|---|
+| `PB_USER` | Account name matching an entry in `api-keys.json` |
+
+You must also provide credentials using one of the two options below.
+
+## Credentials
+
+<Tabs>
+  <Tab title="Option 1: Mount api-keys.json">
+    Set `PB_API_KEYS_PATH` to the path inside the container where you will mount your `api-keys.json` file:
+
+    ```bash
+    -e PB_API_KEYS_PATH=/data/api-keys.json \
+    -v "$(pwd)/api-keys.json:/data/api-keys.json:ro"
+    ```
+
+    This is the recommended approach. The file is mounted read-only so the container cannot modify it.
+  </Tab>
+  <Tab title="Option 2: Env vars">
+    Set individual credential variables and the entrypoint renders a temporary `api-keys.json` at startup:
+
+    | Variable | Required | Description |
+    |---|---|---|
+    | `PB_EXCHANGE` | Yes | Exchange name (e.g. `bybit`, `bitget`) |
+    | `PB_API_KEY` | Yes | API key |
+    | `PB_API_SECRET` | Yes | API secret |
+    | `PB_API_PASSPHRASE` | No | Passphrase (required for Bitget, OKX, Kucoin) |
+
+    The rendered file is linked into the working tree so the live runtime uses it without any code-path divergence.
+  </Tab>
+</Tabs>
+
+## Config
+
+<Tabs>
+  <Tab title="Option 1: Mounted config file">
+    Set `PB_CONFIG_PATH` to the path of your config file inside the container:
+
+    ```bash
+    -e PB_CONFIG_PATH=/data/configs/live.json \
+    -v "$(pwd)/configs:/data/configs:ro"
+    ```
+
+    Optional deployment overrides are translated into `passivbot live` CLI flags so the original config path stays intact.
+  </Tab>
+  <Tab title="Option 2: Inline config">
+    Set `PB_CONFIG_INLINE` to a JSON or HJSON payload:
+
+    ```bash
+    -e PB_CONFIG_INLINE='{"live": {"approved_coins": ["BTC", "ETH", "SOL"]}}'
+    ```
+
+    The entrypoint renders a temporary config file and starts `passivbot live` with it.
+
+    <Note>
+      `PB_CONFIG_INLINE` and `PB_CONFIG_PATH` are mutually exclusive. Setting both will cause the entrypoint to fail.
+    </Note>
+  </Tab>
+  <Tab title="Option 3: Schema defaults">
+    If neither `PB_CONFIG_PATH` nor `PB_CONFIG_INLINE` is set, the container starts from the in-code schema defaults defined in `src/config/schema.py`.
+
+    This is useful for quick tests or when you control everything via optional override variables.
+  </Tab>
+</Tabs>
+
+## Optional overrides
+
+These variables are available regardless of which config option you use:
+
+| Variable | Description |
+|---|---|
+| `PB_APPROVED_COINS` | Comma-separated coin list (e.g. `BTC,ETH,SOL`) or a path accepted by the `--symbols` live CLI flag |
+| `PB_LOG_LEVEL` | Verbosity level: `0`, `1`, `2`, `3`, `debug`, or `trace` |
+| `PB_MONITOR_ENABLED` | `true` or `false` — enable or disable the monitor publisher |
+| `PB_MONITOR_ROOT` | Override the monitor root directory (e.g. `/data/monitor`) |
+| `PB_LOG_DIR` | Override `logging.dir` for container deployments that mount a persistent logs volume |
+
+## Docker run examples
+
+**Using a mounted config file and mounted API keys:**
+
+```bash
+docker run --rm \
+  -e PB_USER=bitget_01 \
+  -e PB_CONFIG_PATH=/data/configs/live.json \
+  -e PB_API_KEYS_PATH=/data/api-keys.json \
+  -e PB_LOG_DIR=/data/logs \
+  -e PB_MONITOR_ROOT=/data/monitor \
+  -v "$(pwd)/configs:/data/configs:ro" \
+  -v "$(pwd)/api-keys.json:/data/api-keys.json:ro" \
+  -v "$(pwd)/logs:/data/logs" \
+  -v "$(pwd)/monitor:/data/monitor" \
+  passivbot-live:latest
+```
+
+**Using env-generated credentials and schema defaults:**
+
+```bash
+docker run --rm \
+  -e PB_USER=bitget_01 \
+  -e PB_EXCHANGE=bitget \
+  -e PB_API_KEY=... \
+  -e PB_API_SECRET=... \
+  -e PB_APPROVED_COINS=BTC,ETH,SOL \
+  passivbot-live:latest
+```
+
+## Docker Compose
+
+A ready-to-use Compose file is available at `container/examples/docker-compose.live.yml`. Use it as the starting point for multi-container or orchestrated deployments.
+
+## File logging
+
+Live runs use Passivbot's canonical `logging.*` config path for file persistence. The container does not implement its own parallel log system.
+
+Key defaults inside the container:
+
+| Setting | Default | Description |
+|---|---|---|
+| `logging.persist_to_file` | `true` | Write logs to disk in addition to stdout |
+| `logging.dir` | `logs` | Log directory inside the container |
+| Log file path | `${logging.dir}/${live.user}.log` | Stable per-user log alias |
+
+Container logs still go to stdout/stderr as normal. To persist them across restarts, set `PB_LOG_DIR` to a path backed by a mounted volume:
+
+```bash
+-e PB_LOG_DIR=/data/logs \
+-v "$(pwd)/logs:/data/logs"
+```
+
+<Tip>
+  On Windows hosts mounting a `caches` folder into the container, set the environment variable `WINDOWS_COMPATIBILITY=1` to ensure cache folder names are Windows-compatible.
+</Tip>

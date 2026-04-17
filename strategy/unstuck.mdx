@@ -1,0 +1,106 @@
+---
+title: "Auto-unstuck: how Passivbot recovers stuck positions"
+description: "How Passivbot's auto-unstuck mechanism realizes small losses to recover from stuck positions, with configuration parameters and operational notes."
+---
+
+A position is "stuck" when price has moved far enough against it that the wallet exposure limit has been reached and no further re-entries are possible. Without intervention, a stuck position sits at a high average entry price while funding fees erode the balance. Auto-unstuck breaks this cycle by performing controlled partial closes at a small loss, then allowing normal re-entries at lower prices, gradually bringing the average entry price closer to the market. Rather than a single large stop-loss, it chips away at the position over time.
+
+## How it works
+
+<Steps>
+  <Step title="Detect stuck position">
+    The bot compares each position's current wallet exposure against its limit. When the ratio exceeds `unstuck_threshold`, the position is considered stuck and unstucking is activated for it.
+
+    ```text
+    if wallet_exposure / wallet_exposure_limit > unstuck_threshold:
+        unstucking enabled
+    ```
+
+    If multiple positions are stuck simultaneously, the bot selects the one with the **smallest gap between average entry price and current market price** — that is, the least underwater position — to unstuck first.
+  </Step>
+  <Step title="Place a partial close at a loss">
+    A small reduce-only order is placed near the upper EMA band (for long) or lower EMA band (for short), deliberately accepting a loss to reduce the position size.
+
+    ```text
+    long_unstuck_close_price  = upper_EMA_band * (1 + unstuck_ema_dist)
+    short_unstuck_close_price = lower_EMA_band * (1 - unstuck_ema_dist)
+    ```
+
+    The close quantity is:
+
+    ```text
+    unstuck_close_qty = full_pos_size * wallet_exposure_limit * unstuck_close_pct
+    ```
+  </Step>
+  <Step title="Re-enter at a lower price">
+    After the partial close reduces the position and frees up margin, the bot places new re-entry orders using the normal grid or trailing logic. These entries are at a lower (long) or higher (short) price than the previous average, reducing the average entry price.
+  </Step>
+  <Step title="Repeat until recovered">
+    The cycle continues — partial close, re-entry, partial close — until the average entry price is close enough to the market that normal take-profit closes can exit the position at a profit. The process is capped by `unstuck_loss_allowance_pct` to prevent runaway drawdown.
+  </Step>
+</Steps>
+
+## Configuration parameters
+
+| Parameter | Description |
+|---|---|
+| `unstuck_close_pct` | Fraction of `full_pos_size × wallet_exposure_limit` to close with each unstuck order |
+| `unstuck_ema_dist` | Distance from the EMA band to place the unstuck close order. Negative values move the price closer to the band; positive moves it further away |
+| `unstuck_loss_allowance_pct` | Weighted percentage below past peak balance to allow losses before pausing unstucking |
+| `unstuck_threshold` | Fraction of `wallet_exposure_limit` at which a position is considered stuck |
+
+**Loss allowance formula:**
+
+```text
+loss_allowance = past_peak_balance * (1 - unstuck_loss_allowance_pct * total_wallet_exposure_limit)
+```
+
+**Example:** past peak balance `$10,000`, `unstuck_loss_allowance_pct = 0.02`, `total_wallet_exposure_limit = 1.5`:
+
+```text
+loss_allowance = $10,000 * (1 - 0.02 * 1.5) = $9,700
+```
+
+The bot stops taking unstuck losses once balance reaches $9,700. It resumes only after other positions generate enough profit to lift the balance floor.
+
+**Unstuck threshold example:** if a position has WE of `0.50` and `wallet_exposure_limit = 1.0`, the position is 50% full. With `unstuck_threshold = 0.45`, unstucking activates and continues until the position is reduced to 45% of the limit.
+
+## Multi-coin advantage
+
+Auto-unstuck is significantly more effective when running across multiple coins simultaneously.
+
+<CardGroup cols={3}>
+  <Card title="Prioritization" icon="arrow-up-1-9">
+    The bot selects the least underwater position to unstuck first, allowing rapid recovery of the most recoverable coin before moving to deeper bags.
+  </Card>
+  <Card title="Profit offsetting" icon="scale-balanced">
+    While one coin realizes small losses to unstuck, other active coins continue generating take-profit income. The equity curve stays smoother than with a single-coin setup.
+  </Card>
+  <Card title="Capped drawdown" icon="gauge-max">
+    Total unstuck losses are bounded by `unstuck_loss_allowance_pct`. After the allowance is consumed, further losses are only permitted after other positions have recovered the balance floor.
+  </Card>
+</CardGroup>
+
+## Weakness: black-swan events
+
+<Warning>
+Auto-unstuck is not a defense against extreme, prolonged unilateral price moves. In black-swan scenarios — exchange failures, stablecoin depegs, delistings, or sustained one-directional crashes — the mechanism may continue taking losses and re-entering into an adversely moving coin. The loss allowance will eventually pause it, but damage can still accumulate before the floor is hit. **Human intervention is the final backstop** for these edge cases.
+</Warning>
+
+## Interaction with other risk systems
+
+Auto-unstuck operates alongside the other risk layers. Understanding how they interact prevents unexpected behavior.
+
+<AccordionGroup>
+  <Accordion title="Equity hard stop loss (HSL)">
+    If HSL triggers RED on a `pside`, that side is panic-closed and halted. Auto-unstuck cannot operate on a halted `pside`. After the HSL cooldown and restart, auto-unstuck resumes from the current state as if starting fresh.
+  </Accordion>
+  <Accordion title="WEL enforcer">
+    The WEL enforcer (`risk_wel_enforcer_threshold`) may also issue reduce-only orders on an oversized position. Both the enforcer and auto-unstuck can act on the same position. The enforcer targets positions above the effective WE cap; auto-unstuck targets positions above `unstuck_threshold` of the limit.
+  </Accordion>
+  <Accordion title="Realized-loss gate">
+    `max_realized_loss_pct` applies to all loss-realizing closes, including auto-unstuck orders. If the projected balance after an unstuck close would fall below the configured floor, the order is blocked. Only panic closes are exempt from this gate.
+
+    If the realized-loss gate is set too tightly, it can prevent auto-unstuck from operating entirely. Use panic mode for forced reduction when the gate is blocking necessary closes.
+  </Accordion>
+</AccordionGroup>

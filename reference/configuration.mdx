@@ -1,0 +1,137 @@
+---
+title: "Passivbot configuration overview"
+description: "Overview of the Passivbot config file structure, schema versioning, coin overrides, forced modes, and links to the detailed parameter references."
+---
+
+Passivbot uses JSON or HJSON config files whose structure is defined by the canonical schema in `src/config/schema.py`. The current schema version is **v7.9.0**, identified in each config file by the top-level `config_version: "v7.9.0"` field. If you omit `config_path` when launching the bot, Passivbot loads the in-code defaults from `src/config/schema.py` directly. Older configs without a `config_version` field are treated as legacy and automatically migrated during load.
+
+## Config file structure
+
+A Passivbot config has six top-level sections:
+
+| Section | Purpose |
+|---|---|
+| `bot` | Trading logic for `long` and `short` sides: grid/trailing entries, closes, unstuck, HSL circuit breakers, forager, and risk enforcers. |
+| `live` | Live trading behavior: approved coins, leverage, margin mode, order execution, risk gates, warmup, and candle caching. |
+| `backtest` | Backtest parameters: date range, exchanges, candle sources, suite scenarios, fee overrides, and liquidation threshold. |
+| `optimize` | Optimizer configuration: parameter bounds, scoring objectives, limits/penalties, genetic algorithm settings, and output options. |
+| `logging` | Log verbosity, file persistence, rotation, and telemetry intervals. |
+| `monitor` | Read-only dashboard publisher: output directory, snapshot intervals, retention, and event rotation. |
+
+## Starting from a new config
+
+The example config at `configs/examples/default_trailing_grid_long_npos10.json` mirrors the in-code defaults exactly and is the recommended starting point.
+
+```bash
+cp configs/examples/default_trailing_grid_long_npos10.json my_config.json
+```
+
+Edit `my_config.json` to set your exchange user, approved coins, and any parameter adjustments. Any key omitted from a user config falls back to the in-code default, so you only need to include the fields you want to override.
+
+## Coin overrides
+
+`coin_overrides` lets you apply per-coin parameter tweaks without forking the entire config. The format is a mapping of coin ticker to override dict:
+
+```json
+"coin_overrides": {
+  "XRP": {
+    "bot": {
+      "long": {
+        "entry_grid_spacing_pct": 0.05,
+        "wallet_exposure_limit": 0.18
+      },
+      "short": {
+        "entry_grid_spacing_pct": 0.055
+      }
+    },
+    "live": {
+      "forced_mode_long": "normal"
+    }
+  }
+}
+```
+
+You can also load a coin's overrides from a separate file using `override_config_path`:
+
+```json
+"coin_overrides": {
+  "BCH": { "override_config_path": "configs/overrides/bch.json" },
+  "DOGE": { "override_config_path": "configs/overrides/doge.json" }
+}
+```
+
+If both `override_config_path` and inline keys are present, the file is loaded first and inline keys are applied after (taking precedence).
+
+### Eligible parameters for `bot.long` / `bot.short` overrides
+
+Only the following parameters may be overridden per coin under `bot.long` or `bot.short`:
+
+```
+close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct,
+close_trailing_grid_ratio, close_trailing_qty_pct,
+close_trailing_retracement_pct, close_trailing_threshold_pct,
+ema_span_0, ema_span_1,
+entry_grid_double_down_factor, entry_grid_spacing_pct,
+entry_grid_spacing_we_weight, entry_grid_spacing_volatility_weight,
+entry_volatility_ema_span_hours, entry_initial_ema_dist,
+entry_initial_qty_pct, entry_trailing_double_down_factor,
+entry_trailing_grid_ratio, entry_trailing_retracement_pct,
+entry_trailing_threshold_pct, unstuck_close_pct, unstuck_ema_dist,
+unstuck_threshold, wallet_exposure_limit
+```
+
+### Eligible parameters for `live` overrides
+
+```
+forced_mode_long, forced_mode_short, leverage
+```
+
+Any key outside the allowlists is silently ignored. Fields not present in the override file or that match the base config values are also ignored (only actual diffs are applied).
+
+<Note>
+Relative `override_config_path` values are resolved against `live.base_config_path` (if set) or the current working directory. If the file is missing, the override is treated as empty and base values are used.
+</Note>
+
+## Forced modes
+
+Both `live.forced_mode_long` and `live.forced_mode_short` accept a short code or full name to globally override the trading mode for all coins on that side. Per-coin `live` overrides can also set these per-symbol.
+
+| Code | Full name | Behavior |
+|---|---|---|
+| `n` | `normal` | Passivbot manages the position as configured. |
+| `m` | `manual` | Passivbot ignores the position entirely. |
+| `gs` | `graceful_stop` | If a position exists, manage it; do not open new positions after it closes. |
+| `t` | `tp_only` | Only manage close orders; no new entries. |
+| `p` | `panic` | Close the position immediately with market or aggressive limit orders. |
+
+## Logging config
+
+The `logging` section controls output verbosity and log persistence.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `level` | `1` | Verbosity: `0` = warnings, `1` = info, `2` = debug, `3` = trace. Overridden per run by `--log-level`. |
+| `persist_to_file` | `true` | Write a timestamped log file during live runs and keep `logs/{user}.log` as a stable alias. |
+| `dir` | `"logs"` | Directory for persisted log files. |
+| `rotation` | `false` | Enable rotating log files by size instead of appending. |
+| `max_bytes_mb` | `10` | Maximum log file size in MB before rotation (only when `rotation = true`). |
+| `backup_count` | `5` | Number of rotated backup files to retain. |
+| `memory_snapshot_interval_minutes` | `30` | Interval between memory telemetry entries (RSS, cache footprint, asyncio task counts). |
+| `volume_refresh_info_threshold_seconds` | `30` | Minimum duration a bulk volume-EMA refresh must take to be logged at INFO; faster runs are logged at DEBUG only. |
+
+## Explore the reference pages
+
+<CardGroup cols={2}>
+  <Card title="Bot parameters" href="/reference/bot-parameters">
+    EMA spans, grid and trailing entries, closes, unstuck logic, and HSL circuit breakers.
+  </Card>
+  <Card title="Live settings" href="/reference/live-settings">
+    Approved coins, leverage, order execution, risk enforcers, warmup, and candle caching.
+  </Card>
+  <Card title="Backtest settings" href="/reference/backtest-settings">
+    Date range, exchanges, OHLCV sources, suite scenarios, fees, and liquidation threshold.
+  </Card>
+  <Card title="Optimizer settings" href="/reference/optimize-settings">
+    Bounds, scoring objectives, limit constraints, genetic algorithm, and Pareto output.
+  </Card>
+</CardGroup>

@@ -1,0 +1,51 @@
+---
+title: "What is Passivbot?"
+description: "Passivbot is an open-source automated trading bot for crypto perpetual futures. Learn about its grid/trailing strategies and supported exchanges."
+---
+
+Passivbot is an open-source cryptocurrency trading bot written in Python and Rust, designed to trade perpetual futures markets with minimal user intervention. It automatically places and manages limit buy and sell orders on your behalf, with order planning computed by a shared Rust orchestrator used by both live trading and backtesting for speed and consistency.
+
+## What makes it different
+
+Passivbot is a contrarian market maker. Rather than predicting price direction or following trends, it provides liquidity on both sides of the market, acting as a price stabilizer. It does not use technical indicators, and it does not follow trends. Instead, it places a grid of orders that absorb sudden price movements in either direction, then closes positions at a small profit whenever the market reverses.
+
+Inspired by the Martingale strategy, the bot makes a small initial entry and then averages into its position as price moves against it. After each re-entry, it updates its take-profit orders so that even a minor market bounce can close the position in profit before starting over.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Grid orders" icon="table-cells">
+    Place a configurable grid of limit orders at defined price intervals to absorb price movements in either direction.
+  </Card>
+  <Card title="Trailing orders" icon="arrow-trend-up">
+    Wait for price to move beyond a threshold and retrace before placing re-entry or take-profit orders, locking in better fills.
+  </Card>
+  <Card title="Forager" icon="compass">
+    Dynamically select the most volatile markets to trade, defined as the mean normalized relative range of recent 1-minute candles.
+  </Card>
+  <Card title="Auto-unstuck" icon="unlock">
+    Gradually realize small losses on stuck positions to free up capital, while keeping total losses within a configurable balance floor.
+  </Card>
+  <Card title="Backtester" icon="clock-rotate-left">
+    Replay historical 1-minute OHLCV data against your configuration using the same Rust engine that powers live trading.
+  </Card>
+  <Card title="Optimizer" icon="wand-magic-sparkles">
+    Find optimal configurations by running thousands of backtests with an evolutionary algorithm (NSGA-II/III) to converge on Pareto-optimal candidates.
+  </Card>
+</CardGroup>
+
+## Supported exchanges
+
+Passivbot supports the following perpetual futures exchanges:
+
+- **Bybit**
+- **Bitget**
+- **OKX**
+- **GateIO**
+- **Binance**
+- **Kucoin**
+- **Hyperliquid**
+
+<Warning>
+  Passivbot trades with real funds on leveraged perpetual futures markets. Losses can exceed your initial position size. Use it at your own risk. Always start with small position sizes, validate your configuration with backtesting, and fully understand the risk parameters before deploying with significant capital.
+</Warning>

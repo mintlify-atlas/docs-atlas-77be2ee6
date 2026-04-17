@@ -1,0 +1,109 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Passivbot",
+  "projectDescription": "An automated cryptocurrency trading bot for perpetual futures markets on Bybit, Bitget, OKX, GateIO, Binance, Kucoin, and Hyperliquid, featuring grid/trailing order strategies, backtesting, and multi-objective optimization.",
+  "theme": "aspen",
+  "primaryColor": "#242b2c",
+  "lightColor": "#6a6a6d",
+  "darkColor": "#ebeaea",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Live Trading",
+            "pages": [
+              "live/running",
+              "live/api-keys",
+              "live/exchanges",
+              "live/deployment"
+            ]
+          },
+          {
+            "group": "Strategy & Features",
+            "pages": [
+              "strategy/overview",
+              "strategy/forager",
+              "strategy/risk-management",
+              "strategy/unstuck"
+            ]
+          },
+          {
+            "group": "Backtesting & Optimization",
+            "pages": [
+              "backtesting",
+              "optimizing",
+              "tools"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "monitor",
+              "troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/configuration",
+              "reference/bot-parameters",
+              "reference/live-settings",
+              "reference/backtest-settings",
+              "reference/optimize-settings"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "reference/cli",
+              "reference/metrics"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Grid and trailing order strategies for perpetual futures markets",
+    "Forager dynamic coin selection based on volatility, volume, and EMA readiness",
+    "Auto-unstuck mechanism for managing stuck positions with controlled partial closes",
+    "Multi-objective evolutionary optimizer (NSGA-II/III via pymoo or DEAP) with Pareto front",
+    "Rust-powered backtester and order orchestrator for speed and consistency",
+    "Equity Hard Stop Loss (HSL) circuit breaker with tiered YELLOW/ORANGE/RED states",
+    "Suite backtesting across multiple scenarios and exchanges",
+    "Web dashboard, terminal TUI, and relay monitor for live bot observability",
+    "Docker/container deployment support with env-driven configuration",
+    "Multi-exchange support: Bybit, Bitget, OKX, GateIO, Binance, Kucoin, Hyperliquid"
+  ],
+  "publicApiSurface": [
+    "passivbot live [-u USER] [config.json]",
+    "passivbot backtest [config.json]",
+    "passivbot optimize [config.json]",
+    "passivbot download [config.json]",
+    "passivbot tool pareto [pareto_dir]",
+    "passivbot tool pareto-dash --data-root optimize_results",
+    "passivbot tool monitor-relay --monitor-root monitor",
+    "passivbot tool monitor-web",
+    "passivbot tool monitor-tui",
+    "passivbot tool fill-events-dash --users USER",
+    "passivbot tool fetch-balance --user USER",
+    "passivbot tool candle-doctor",
+    "passivbot tool generate-mcap-list",
+    "passivbot tool iterative-backtester"
+  ]
+}
